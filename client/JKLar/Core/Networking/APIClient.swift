@@ -93,6 +93,44 @@ actor APIClient {
         return try Self.decode(HouseholdDTO.self, from: data)
     }
 
+    /// `POST /api/v1/households` (plano 01-02/01-07) — o papel do criador é sempre `.admin`,
+    /// decidido no servidor; `CreateHouseholdRequest` nem carrega um campo de papel (D-02).
+    /// Não listado no `<files>` do plano 01-07, mas necessário para o gate de criar-ou-entrar
+    /// funcionar de verdade contra o backend — ver deviations do plano 01-07.
+    func createHousehold(name: String) async throws -> HouseholdDTO {
+        let body = try Self.encoder.encode(CreateHouseholdRequest(name: name))
+        let (data, response) = try await send(path: "api/v1/households", method: "POST", body: body, requiresAuth: true)
+        guard response.statusCode == 201 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+        return try Self.decode(HouseholdDTO.self, from: data)
+    }
+
+    /// `GET /api/v1/households/current/members` (plano 01-02, exposto ao cliente pela
+    /// primeira vez no plano 01-07) — a lista real de membros, nunca inferida no cliente a
+    /// partir de `sessionStore.currentUser` (que pode estar vazio após um relançamento do
+    /// app sem um novo `/auth/session`).
+    func members() async throws -> [MemberDTO] {
+        let (data, response) = try await send(
+            path: "api/v1/households/current/members", method: "GET", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+        return try Self.decode([MemberDTO].self, from: data)
+    }
+
+    /// `PATCH /api/v1/auth/profile` (plano 01-07, D-04) — atualização explícita do gênero
+    /// coletado no formulário de criar casa. Nenhuma lógica de tema é derivada deste valor
+    /// nesta fase (Fase 9).
+    func updateProfile(gender: Gender) async throws {
+        let body = try Self.encoder.encode(UpdateProfileRequest(gender: gender))
+        let (_, response) = try await send(path: "api/v1/auth/profile", method: "PATCH", body: body, requiresAuth: true)
+        guard response.statusCode == 204 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+    }
+
     /// `POST /api/v1/auth/logout` — D-11: o logout do servidor é o que vale. Sempre apaga o
     /// Keychain local, mesmo que a chamada de rede falhe (o dispositivo não deve continuar
     /// achando que está logado só porque a rede caiu no momento do logout).

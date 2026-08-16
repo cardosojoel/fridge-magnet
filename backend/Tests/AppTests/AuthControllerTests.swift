@@ -202,4 +202,42 @@ final class AuthControllerTests: XCTestCase {
             }
         }
     }
+
+    // MARK: Plano 01-07 — PATCH /api/v1/auth/profile (D-04)
+
+    func testUpdateProfileWithValidBearerSetsGender() async throws {
+        try await TestSupport.withApp { app in
+            let user = try await TestSupport.createTestUser(app: app, displayName: "Ana")
+            let userID = try user.requireID()
+            let token = try await TestSupport.makeAccessToken(app: app, userID: userID)
+
+            try await app.testable().test(
+                .PATCH, "/api/v1/auth/profile",
+                beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(UpdateProfileRequest(gender: .feminino), as: .json)
+                },
+                afterResponse: { (res: XCTHTTPResponse) async throws in
+                    XCTAssertEqual(res.status, .noContent)
+                }
+            )
+
+            let reloaded = try await User.find(userID, on: app.db)
+            XCTAssertEqual(reloaded?.gender, "feminino")
+        }
+    }
+
+    func testUpdateProfileWithoutBearerIsRejected() async throws {
+        try await TestSupport.withApp { app in
+            try await app.testable().test(
+                .PATCH, "/api/v1/auth/profile",
+                beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                    try req.content.encode(UpdateProfileRequest(gender: .masculino), as: .json)
+                },
+                afterResponse: { (res: XCTHTTPResponse) async throws in
+                    XCTAssertEqual(res.status, .unauthorized)
+                }
+            )
+        }
+    }
 }

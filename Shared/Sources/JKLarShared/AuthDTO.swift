@@ -80,6 +80,18 @@ public struct LogoutRequest: Codable, Sendable {
     }
 }
 
+/// Corpo de `PATCH /api/v1/auth/profile` (plano 01-07) — atualização explícita de gênero
+/// depois do login (D-04). O gênero é oferecido no formulário de criar casa, não no login
+/// em si, então precisa de uma rota própria em vez de reabrir `/auth/session`; nenhuma
+/// lógica de tema é derivada deste valor nesta fase (Fase 9).
+public struct UpdateProfileRequest: Codable, Sendable {
+    public var gender: Gender
+
+    public init(gender: Gender) {
+        self.gender = gender
+    }
+}
+
 /// Constantes de duração de sessão lidas por cliente e servidor a partir de um único
 /// lugar (D-09) — nunca literais duplicados em `AuthController`/`SessionService` de um
 /// lado e no cliente do outro.

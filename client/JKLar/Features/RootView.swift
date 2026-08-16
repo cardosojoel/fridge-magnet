@@ -2,19 +2,21 @@ import SwiftUI
 
 /// Estado de navegação de nível superior do app inteiro.
 ///
-/// Os quatro casos são declarados desde já (plano 01-03), mesmo que só `.loading` e
-/// `.signedOut` tenham destino implementado nesta fatia. Declarar o enum completo agora —
-/// em vez de só os dois casos que já têm tela — é o que impede que uma fase futura invente
-/// navegação imperativa em cima de um roteador incompleto.
+/// Os quatro casos são declarados desde já (plano 01-03) — declarar o enum completo, em vez
+/// de só os casos que já tinham tela nas fatias anteriores, é o que impede que uma fase
+/// futura invente navegação imperativa em cima de um roteador incompleto. Desde o plano
+/// 01-07, os quatro casos têm destino real (D-02: `.needsHousehold` tem exatamente uma
+/// saída, o gate de criar-ou-entrar).
 enum JKAppState: Equatable {
     /// Resolvendo a sessão local no lançamento do app.
     case loading
     /// Nenhuma sessão válida encontrada — mostra `LoginView`.
     case signedOut
-    /// Sessão válida, mas o usuário ainda não pertence a nenhuma casa. Tela chega no
-    /// plano 01-07.
+    /// Sessão válida, mas o usuário ainda não pertence a nenhuma casa — mostra
+    /// `OnboardingView` (D-02, plano 01-07).
     case needsHousehold
-    /// Sessão válida e o usuário já pertence a uma casa. Tela chega no plano 01-07.
+    /// Sessão válida e o usuário já pertence a uma casa — mostra `HouseholdView` (plano
+    /// 01-07).
     case inHousehold
 }
 
@@ -35,16 +37,13 @@ struct RootView: View {
             case .signedOut:
                 LoginView()
             case .needsHousehold:
-                // Onboarding real de criar/entrar em casa é escopo do plano 01-07 — este é
-                // um destino mínimo, não um beco sem saída.
-                Text(JKCopy.needsHouseholdPlaceholder)
-                    .font(JKTypography.body)
-                    .multilineTextAlignment(.center)
-                    .padding(JKSpacing.lg)
-                    .jkGlassBackground()
+                // Gate obrigatório de casa (D-02) — .needsHousehold tem exatamente esta
+                // saída, nenhum caminho leva o app para a tela da casa sem casa.
+                OnboardingView()
             case .inHousehold:
-                // Tela real da casa é escopo do plano 01-07 — este é um destino mínimo, não
-                // um beco sem saída.
+                // Tela real da casa chega na Task 2 deste mesmo plano (HouseholdView) —
+                // placeholder mínimo só para este arquivo compilar isoladamente enquanto a
+                // Task 1 é verificada antes da Task 2 existir.
                 Text(JKCopy.inHouseholdPlaceholderPrefix + (sessionStore.household?.name ?? ""))
                     .font(JKTypography.body)
                     .multilineTextAlignment(.center)

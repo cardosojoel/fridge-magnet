@@ -22,6 +22,12 @@ struct AuthController: RouteCollection {
         // apresentado no corpo é a única credencial dessas duas rotas.
         auth.post("refresh", use: refresh)
         auth.post("logout", use: logout)
+
+        // PATCH /profile roda atrás de SessionAuthenticator: D-04 coleta gênero no
+        // formulário de criar casa (plano 01-07), depois da sessão já existir — uma rota
+        // própria evita reabrir `/auth/session` só para atualizar um campo de perfil.
+        let authenticated = auth.grouped(SessionAuthenticator(), User.guardMiddleware())
+        authenticated.patch("profile", use: updateProfile)
     }
 
     @Sendable
@@ -112,6 +118,20 @@ struct AuthController: RouteCollection {
         let body = try req.content.decode(LogoutRequest.self)
         let sessionService = SessionService(app: req.application)
         try await sessionService.revoke(presentedToken: body.refreshToken, on: req.db)
+        return Response(status: .noContent)
+    }
+
+    /// `PATCH /api/v1/auth/profile` — só gênero é atualizável aqui (D-04). Sobrescreve
+    /// deliberadamente qualquer valor já salvo: diferente do preenchimento silencioso em
+    /// `session(req:)` (que só entra se `user.gender == nil`), esta rota é uma escolha
+    /// explícita do usuário no formulário de criar casa, então a intenção mais recente
+    /// vence.
+    @Sendable
+    func updateProfile(req: Request) async throws -> Response {
+        let user = try req.auth.require(User.self)
+        let body = try req.content.decode(UpdateProfileRequest.self)
+        user.gender = body.gender.rawValue
+        try await user.save(on: req.db)
         return Response(status: .noContent)
     }
 

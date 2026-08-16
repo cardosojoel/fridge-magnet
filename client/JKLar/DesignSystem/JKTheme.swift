@@ -86,9 +86,42 @@ enum JKCopy {
     static let loginErrorMessage = "Não foi possível entrar. Verifique sua conexão e tente novamente."
     static let loginErrorRetry = "Tentar de novo"
 
-    /// Placeholders mínimos dos dois ramos que o plano 01-05 abre em `RootView`
-    /// (`.needsHousehold`/`.inHousehold`) — o onboarding de criar/entrar em casa e a tela da
-    /// casa em si são escopo do plano 01-07, que substitui este texto por telas reais.
-    static let needsHouseholdPlaceholder = "Vamos formar sua casa — essa tela chega no próximo plano."
+    /// Placeholder temporário de `.inHousehold` em `RootView` — só existe entre a Task 1 e a
+    /// Task 2 do plano 01-07 (a Task 2 substitui por `HouseholdView` real e remove esta
+    /// linha).
     static let inHouseholdPlaceholderPrefix = "Você já está em uma casa: "
+
+    /// Cópia genérica reusável entre contextos ("Tentar de novo" inline) — não listada no
+    /// `<files>` do plano 01-07, mas necessária para o gate de grep contra string solta em
+    /// `Text(` (ver deviations do plano 01-07).
+    static let retryButtonLabel = "Tentar de novo"
+
+    // MARK: - Onboarding (plano 01-07, D-02/D-04)
+
+    static let onboardingToggleCreate = "Criar casa"
+    static let onboardingToggleJoin = "Entrar com código"
+    static let onboardingCreateHeading = "Criar casa"
+    static let onboardingHouseNamePlaceholder = "Nome da casa (ex.: Família Silva)"
+    static let onboardingGenderLabel = "Gênero (opcional)"
+    static let onboardingGenderFeminino = "Feminino"
+    static let onboardingGenderMasculino = "Masculino"
+    static let onboardingGenderNaoInformado = "Prefiro não dizer"
+    /// Item inicial do seletor de gênero, representando "nenhuma escolha feita ainda"
+    /// (`Gender?.none`) — distinto de `onboardingGenderNaoInformado`, que é uma resposta
+    /// real enviada ao servidor. Sem essa entrada, o Picker não teria como representar o
+    /// estado "opcional, ainda não tocado" (D-04).
+    static let onboardingGenderPlaceholder = "Selecionar"
+    static let onboardingCreateCTA = "Criar casa"
+    static let onboardingCreateGenericError = "Não foi possível concluir. Tente de novo em instantes."
+    /// O ramo "Entrar com código" (plano 01-09) só precisa existir como destino nesta
+    /// fatia — D-02 exige que o seletor tenha os dois rótulos desde já, sem um beco sem
+    /// saída, mas o formulário de código em si é escopo do plano 01-09.
+    static let onboardingJoinPlaceholder = "Entrar com um código chega no próximo plano."
+
+    // MARK: - Household (plano 01-07)
+
+    static let householdSingleMemberHeading = "Você é o único membro por enquanto"
+    static let householdSingleMemberBody = "Convide até 9 pessoas pra formar sua casa — toque em Convidar pra gerar um código ou link."
+    static let householdLoadErrorMessage = "Não foi possível carregar os membros da casa."
+    static let householdUnnamedMember = "Sem nome"
 }
