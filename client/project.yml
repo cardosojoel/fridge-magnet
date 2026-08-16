@@ -1,0 +1,46 @@
+name: JKLar
+options:
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
+    PRODUCT_BUNDLE_IDENTIFIER: com.jklar.app
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  JKLar:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - path: JKLar
+    info:
+      path: JKLar/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.jklar.app
+            CFBundleURLSchemes:
+              - jklar
+    entitlements:
+      path: JKLar/JKLar.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.developer.applesignin:
+          - Default
+    scheme:
+      testTargets:
+        - JKLarTests
+  JKLarTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - path: JKLarTests
+    dependencies:
+      - target: JKLar
