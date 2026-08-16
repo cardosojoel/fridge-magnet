@@ -2,21 +2,20 @@ import AuthenticationServices
 import JKLarShared
 import SwiftUI
 
-/// Tela de login. D-01: Sign in with Apple aparece primeiro e é o único botão de provedor
-/// nesta fatia — os botões de Google e Microsoft chegam no plano 01-08, na mesma ordem
-/// definida por D-01 (Apple, depois Google, depois Microsoft). Não há botão inerte
-/// desenhado aqui para provedores futuros.
+/// Tela de login. D-01: a ordem dos três botões é sempre Apple, Google, Microsoft — Apple
+/// obrigatório primeiro pela App Store Guideline 4.8, os outros dois na ordem que
+/// `01-CONTEXT.md`/`01-UI-SPEC.md` fixam.
 ///
-/// O toque no `SignInWithAppleButton` nativo abre o fluxo `ASAuthorization` real; ao
-/// concluir, `AppleSignInService.result(from:)` extrai `(identityToken, fullName?)` e
-/// `SessionStore.signIn` troca isso por uma sessão do JK Lar (`APIClient.createSession`),
-/// gravando no Keychain e atualizando o roteador de `RootView`.
+/// Todo estado por provedor (qual está em andamento, qual mensagem de erro mostrar) vive em
+/// `LoginViewModel` — esta view só o reflete. O toque no `SignInWithAppleButton` nativo abre
+/// o fluxo `ASAuthorization` real; o toque em Google/Microsoft chama
+/// `GoogleSignInService`/`MicrosoftSignInService` (SDKs GIDSignIn/MSAL, plano 01-08). Os três
+/// caminhos convergem no mesmo `SessionStore.signIn(provider:identityToken:...)`.
 struct LoginView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(SessionStore.self) private var sessionStore
 
-    @State private var isSigningIn = false
-    @State private var errorMessage: String?
+    @State private var viewModel = LoginViewModel()
 
     var body: some View {
         VStack(spacing: JKSpacing.xl) {
@@ -35,7 +34,7 @@ struct LoginView: View {
 
             Spacer()
 
-            if let errorMessage {
+            if let errorMessage = viewModel.errorMessage {
                 VStack(spacing: JKSpacing.sm) {
                     Text(errorMessage)
                         .font(JKTypography.label)
@@ -43,14 +42,17 @@ struct LoginView: View {
                         .multilineTextAlignment(.center)
 
                     Button(JKCopy.loginErrorRetry) {
-                        self.errorMessage = nil
+                        viewModel.clearError()
                     }
                     .font(JKTypography.body)
                 }
             }
 
-            signInControl
-                .disabled(isSigningIn)
+            VStack(spacing: JKSpacing.sm) {
+                appleRow
+                googleRow
+                microsoftRow
+            }
 
             Spacer(minLength: JKSpacing.xl)
         }
@@ -58,54 +60,72 @@ struct LoginView: View {
         .jkGlassBackground()
     }
 
-    /// Enquanto `isSigningIn` é `true`, o botão tocado troca o rótulo por `ProgressView` no
+    /// Enquanto `.apple` está em andamento, o controle inteiro troca para `ProgressView` no
     /// mesmo espaço/frame — a estrutura da tela não pode saltar durante o login
-    /// (01-UI-SPEC.md "loading | login-buttons").
+    /// (01-UI-SPEC.md "loading | login-buttons"). Os outros dois botões desabilitam, nunca
+    /// escondem, via `.disabled(viewModel.isDisabled(.apple))`.
     @ViewBuilder
-    private var signInControl: some View {
-        if isSigningIn {
+    private var appleRow: some View {
+        if viewModel.isInProgress(.apple) {
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: JKLayout.minTapTarget)
                 .background(colorScheme == .dark ? Color.white : Color.black, in: JKLayout.controlShape)
         } else {
             SignInWithAppleButton(.continue) { request in
                 AppleSignInService.configure(request)
+                // Roda de forma síncrona no toque, antes do fluxo nativo abrir — é o que
+                // permite os outros dois botões desabilitarem já durante o prompt da Apple.
+                viewModel.beginApple()
             } onCompletion: { result in
-                Task { await handleAppleCompletion(result) }
+                Task {
+                    await viewModel.handleAppleCompletion(
+                        AppleSignInService.result(from: result),
+                        exchange: exchange(provider: .apple)
+                    )
+                }
             }
             .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
             .frame(maxWidth: .infinity, minHeight: JKLayout.minTapTarget)
             .cornerRadius(JKLayout.controlCornerRadius)
+            .disabled(viewModel.isDisabled(.apple))
         }
     }
 
-    private func handleAppleCompletion(_ authorizationResult: Result<ASAuthorization, Error>) async {
-        switch AppleSignInService.result(from: authorizationResult) {
-        case .success(let signInResult):
-            await performSignIn(with: signInResult)
-        case .failure(.cancelled):
-            // Cancelamento pelo usuário: volta ao estado inicial sem mensagem de erro.
-            isSigningIn = false
-        case .failure:
-            isSigningIn = false
-            errorMessage = JKCopy.loginErrorMessage
+    private var googleRow: some View {
+        Button {
+            Task { await viewModel.signInWithGoogle(exchange: exchange(provider: .google)) }
+        } label: {
+            if viewModel.isInProgress(.google) {
+                ProgressView()
+            } else {
+                Text(JKCopy.loginContinueWithGoogle)
+            }
         }
+        .buttonStyle(.jkPrimary)
+        .disabled(viewModel.isInProgress(.google) || viewModel.isDisabled(.google))
     }
 
-    private func performSignIn(with result: AppleSignInResult) async {
-        isSigningIn = true
-        errorMessage = nil
-        do {
-            try await sessionStore.signIn(
-                provider: .apple,
-                identityToken: result.identityToken,
-                displayName: result.displayName,
-                gender: nil
-            )
-        } catch {
-            errorMessage = JKCopy.loginErrorMessage
+    private var microsoftRow: some View {
+        Button {
+            Task { await viewModel.signInWithMicrosoft(exchange: exchange(provider: .microsoft)) }
+        } label: {
+            if viewModel.isInProgress(.microsoft) {
+                ProgressView()
+            } else {
+                Text(JKCopy.loginContinueWithMicrosoft)
+            }
         }
-        isSigningIn = false
+        .buttonStyle(.jkPrimary)
+        .disabled(viewModel.isInProgress(.microsoft) || viewModel.isDisabled(.microsoft))
+    }
+
+    /// `SessionStore` nunca é conhecido por `LoginViewModel` (mantém o modelo testável sem
+    /// `FakeTransport`) — esta view é quem fecha o laço, chamando o mesmo
+    /// `createSession(provider:identityToken:...)` para os três provedores.
+    private func exchange(provider: AuthProvider) -> (String, String?) async throws -> Void {
+        { identityToken, displayName in
+            try await sessionStore.signIn(provider: provider, identityToken: identityToken, displayName: displayName, gender: nil)
+        }
     }
 }
 

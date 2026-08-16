@@ -18,6 +18,20 @@ packages:
   # duplicar `SessionRequest`/`SessionResponse`/`HouseholdDTO` como structs locais.
   JKLarShared:
     path: ../Shared
+  # Login com Google (plano 01-08). Tag 9.2.0 verificada em
+  # github.com/google/GoogleSignIn-iOS/releases em 2026-08-16 — pinar ≥7.1.0 não é
+  # preferência: versões anteriores não trazem Privacy Manifest e são rejeitadas na
+  # submissão desde maio de 2024 (01-RESEARCH.md, Package Legitimacy Audit: OK/Approved,
+  # org oficial google).
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: "9.2.0"
+  # Login com Microsoft (plano 01-08). Tag 2.14.1 verificada em
+  # github.com/AzureAD/microsoft-authentication-library-for-objc/releases em 2026-08-16
+  # (01-RESEARCH.md, Package Legitimacy Audit: OK/Approved, org oficial AzureAD).
+  MSAL:
+    url: https://github.com/AzureAD/microsoft-authentication-library-for-objc
+    from: "2.14.1"
 targets:
   JKLar:
     type: application
@@ -26,6 +40,9 @@ targets:
       - path: JKLar
     dependencies:
       - package: JKLarShared
+      - package: GoogleSignIn
+        product: GoogleSignIn
+      - package: MSAL
     info:
       path: JKLar/Info.plist
       properties:
@@ -36,6 +53,34 @@ targets:
           - CFBundleURLName: com.jklar.app
             CFBundleURLSchemes:
               - jklar
+          # Esquema de retorno do fluxo de browser do GIDSignIn — o "reversed client ID"
+          # que o Google gera junto do OAuth client ID (visível na mesma tela do console
+          # que mostra o GOOGLE_CLIENT_ID). Não é uma transformação textual simples do
+          # client ID (não é literalmente a string invertida) — por isso é uma segunda
+          # variável de ambiente, não derivada de GOOGLE_CLIENT_ID em build time.
+          - CFBundleURLName: com.jklar.app.google
+            CFBundleURLSchemes:
+              - $(GOOGLE_REVERSED_CLIENT_ID)
+          # Esquema de retorno do fluxo MSAL (D-01/D-03 da task): sempre
+          # msauth.<bundle-id> para o formato de redirect URI que a Microsoft espera.
+          - CFBundleURLName: com.jklar.app.msal
+            CFBundleURLSchemes:
+              - msauth.com.jklar.app
+        # MSAL precisa poder checar se os apps oficiais da Microsoft (Authenticator/Company
+        # Portal) estão instalados para oferecer broker SSO — sem isto no
+        # LSApplicationQueriesSchemes, canOpenURL sempre devolve false silenciosamente.
+        LSApplicationQueriesSchemes:
+          - msauthv2
+          - msauthv3
+        # Lido pelo GIDSignIn na inicialização quando nenhuma GIDConfiguration explícita é
+        # passada — mesmo padrão de $(DEVELOPMENT_TEAM) já usado neste arquivo (01-03):
+        # substituído pelo XcodeGen a partir da variável de ambiente no momento do
+        # `xcodegen generate`, nunca versionado como valor literal.
+        GIDClientID: "$(GOOGLE_CLIENT_ID)"
+        # MSAL não lê o client ID do Info.plist sozinho (diferente do GIDSignIn) —
+        # `MicrosoftSignInService` lê esta chave explicitamente para montar o
+        # `MSALPublicClientApplicationConfig` em runtime.
+        MicrosoftClientID: "$(MICROSOFT_CLIENT_ID)"
         # Único outro conhecimento do cliente sobre o backend além do 127.0.0.1 de DEBUG em
         # APIConfiguration.swift (regra zero-trust do CLAUDE.md) — placeholder até a Fase 10
         # decidir o hosting real (Fly.io/Railway, STACK.md); não é lido em builds DEBUG.
@@ -47,6 +92,10 @@ targets:
         com.apple.security.network.client: true
         com.apple.developer.applesignin:
           - Default
+        # O cache de tokens do MSAL precisa de um keychain-access-group explícito — sem
+        # isto o fluxo compila mas falha só em tempo de execução no macOS (plano 01-08).
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.jklar.app
     scheme:
       testTargets:
         - JKLarTests

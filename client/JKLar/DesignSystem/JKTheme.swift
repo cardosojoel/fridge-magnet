@@ -85,6 +85,12 @@ enum JKCopy {
     static let loginTagline = "A casa toda em um só lugar."
     static let loginErrorMessage = "Não foi possível entrar. Verifique sua conexão e tente novamente."
     static let loginErrorRetry = "Tentar de novo"
+    /// String exata do Copywriting Contract (01-UI-SPEC.md § Copywriting Contract, linha
+    /// "Login — Google button") — segundo botão, na ordem Apple → Google → Microsoft (D-01).
+    static let loginContinueWithGoogle = "Continuar com o Google"
+    /// String exata do Copywriting Contract (linha "Login — Microsoft button") — terceiro
+    /// botão.
+    static let loginContinueWithMicrosoft = "Continuar com a Microsoft"
 
     /// Placeholders mínimos dos dois ramos que o plano 01-05 abre em `RootView`
     /// (`.needsHousehold`/`.inHousehold`) — o onboarding de criar/entrar em casa e a tela da
