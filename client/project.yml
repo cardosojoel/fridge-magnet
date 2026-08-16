@@ -44,3 +44,11 @@ targets:
       - path: JKLarTests
     dependencies:
       - target: JKLar
+    settings:
+      base:
+        # XcodeGen infere TEST_HOST/BUNDLE_LOADER automaticamente a partir da dependência
+        # no target de app, mas usa o layout de bundle do iOS (executável direto dentro de
+        # `JKLar.app`). No macOS o executável fica em `JKLar.app/Contents/MacOS/JKLar` — sem
+        # este override condicional por SDK o teste hosted falha ao localizar o TEST_HOST no
+        # build de macOS ("Could not find test host for JKLarTests").
+        TEST_HOST[sdk=macosx*]: "$(BUILT_PRODUCTS_DIR)/JKLar.app/Contents/MacOS/JKLar"
