@@ -41,14 +41,7 @@ struct RootView: View {
                 // saída, nenhum caminho leva o app para a tela da casa sem casa.
                 OnboardingView()
             case .inHousehold:
-                // Tela real da casa chega na Task 2 deste mesmo plano (HouseholdView) —
-                // placeholder mínimo só para este arquivo compilar isoladamente enquanto a
-                // Task 1 é verificada antes da Task 2 existir.
-                Text(JKCopy.inHouseholdPlaceholderPrefix + (sessionStore.household?.name ?? ""))
-                    .font(JKTypography.body)
-                    .multilineTextAlignment(.center)
-                    .padding(JKSpacing.lg)
-                    .jkGlassBackground()
+                HouseholdView()
             }
         }
         .environment(sessionStore)

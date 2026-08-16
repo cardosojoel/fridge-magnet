@@ -86,11 +86,6 @@ enum JKCopy {
     static let loginErrorMessage = "Não foi possível entrar. Verifique sua conexão e tente novamente."
     static let loginErrorRetry = "Tentar de novo"
 
-    /// Placeholder temporário de `.inHousehold` em `RootView` — só existe entre a Task 1 e a
-    /// Task 2 do plano 01-07 (a Task 2 substitui por `HouseholdView` real e remove esta
-    /// linha).
-    static let inHouseholdPlaceholderPrefix = "Você já está em uma casa: "
-
     /// Cópia genérica reusável entre contextos ("Tentar de novo" inline) — não listada no
     /// `<files>` do plano 01-07, mas necessária para o gate de grep contra string solta em
     /// `Text(` (ver deviations do plano 01-07).
