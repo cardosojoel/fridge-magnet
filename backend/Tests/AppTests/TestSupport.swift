@@ -97,7 +97,7 @@ enum TestSupport {
             fatalError("Banco owner não é um SQLDatabase — não é possível truncar as tabelas de teste")
         }
         try await sql.raw("""
-            TRUNCATE TABLE household_members, households, linked_identities, users
+            TRUNCATE TABLE refresh_tokens, household_members, households, linked_identities, users
             RESTART IDENTITY CASCADE
             """).run()
     }
