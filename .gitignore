@@ -1,1 +1,15 @@
 .planning/research/.cache/
+
+# Build artifacts
+.build/
+*.xcuserdata*
+.DS_Store
+
+# Secrets — chaves de assinatura JWT, DSNs, envs locais
+.env
+*.p8
+
+# Artefatos gerados pelo XcodeGen a partir de client/project.yml (plano 01-03) — nunca versionados
+client/JKLar.xcodeproj/
+client/JKLar/Info.plist
+client/JKLar/JKLar.entitlements

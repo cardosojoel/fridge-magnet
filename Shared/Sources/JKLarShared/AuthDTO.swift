@@ -1,0 +1,110 @@
+import Foundation
+
+/// Provedores de identidade suportados pelo login do JK Lar.
+/// Ordem de exibição no cliente (D-01, 01-CONTEXT.md): Apple primeiro (obrigatório pela
+/// App Store Guideline 4.8), depois Google, depois Microsoft. Só `.apple` tem verificador
+/// implementado no plano 01-01; `.google` e `.microsoft` chegam no plano 01-08.
+public enum AuthProvider: String, Codable, Sendable {
+    case apple
+    case google
+    case microsoft
+}
+
+/// Gênero coletado no onboarding (D-04) — campo opcional, usado só pela lógica de tema
+/// visual da Fase 9. Nenhuma lógica de tema vive neste arquivo: é só o contrato de dados.
+public enum Gender: String, Codable, Sendable {
+    case feminino
+    case masculino
+    case naoInformado
+}
+
+/// Corpo de `POST /api/v1/auth/session`.
+///
+/// `identityToken` é o token assinado que o SDK nativo do provedor devolveu ao cliente
+/// (Apple: `identityToken` da `ASAuthorizationAppleIDCredential`; Google/Microsoft: `idToken`).
+/// O backend verifica esse token contra o JWKS do provedor e nunca o persiste, loga ou
+/// devolve ao cliente (D-12) — ele existe só na memória do handler que processa este request.
+public struct SessionRequest: Codable, Sendable {
+    public var provider: AuthProvider
+    public var identityToken: String
+    public var displayName: String?
+    public var gender: Gender?
+
+    public init(
+        provider: AuthProvider,
+        identityToken: String,
+        displayName: String? = nil,
+        gender: Gender? = nil
+    ) {
+        self.provider = provider
+        self.identityToken = identityToken
+        self.displayName = displayName
+        self.gender = gender
+    }
+}
+
+/// Recorte mínimo de casa devolvido dentro de `SessionResponse`.
+///
+/// Definido aqui — e não em um `HouseholdDTO.swift` próprio — porque o plano 01-01 não cria
+/// nenhuma tabela de casa; ele só reserva o campo `SessionResponse.household` no contrato
+/// para o plano 01-02 preencher, sem exigir recompilação de um cliente já publicado na
+/// App Store. O plano 01-02 pode estender este tipo (nunca renomear o campo).
+public struct HouseholdSummaryDTO: Codable, Sendable {
+    public var id: UUID
+    public var name: String
+
+    public init(id: UUID, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
+/// Resposta de sessão do JK Lar — devolvida por `POST /api/v1/auth/session` e, no plano
+/// 01-04, por `POST /api/v1/auth/refresh`.
+public struct SessionResponse: Codable, Sendable {
+    public var accessToken: String
+    public var refreshToken: String
+    /// Segundos até `accessToken` expirar — 900 (15 min) por D-09.
+    public var expiresIn: Int
+    public var user: UserDTO
+    /// Nulo até o plano 01-02 existir uma casa para o usuário — ver `HouseholdSummaryDTO`.
+    public var household: HouseholdSummaryDTO?
+
+    public init(
+        accessToken: String,
+        refreshToken: String,
+        expiresIn: Int,
+        user: UserDTO,
+        household: HouseholdSummaryDTO? = nil
+    ) {
+        self.accessToken = accessToken
+        self.refreshToken = refreshToken
+        self.expiresIn = expiresIn
+        self.user = user
+        self.household = household
+    }
+}
+
+/// Perfil de usuário devolvido ao cliente.
+///
+/// Nunca inclui e-mail não verificado do provedor nem qualquer claim bruta do identity
+/// token — só o que o JK Lar já resolveu e persistiu como seu (D-12, zero-trust do
+/// front-end em `.claude/CLAUDE.md`).
+public struct UserDTO: Codable, Sendable {
+    public var id: UUID
+    public var displayName: String?
+    public var email: String?
+    public var gender: Gender?
+
+    public init(
+        id: UUID,
+        displayName: String? = nil,
+        email: String? = nil,
+        gender: Gender? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.email = email
+        self.gender = gender
+    }
+}
