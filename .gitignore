@@ -1,5 +1,8 @@
 .planning/research/.cache/
 
+# Worktrees criados pelos executores GSD durante execução paralela de fases — efêmeros, nunca versionados
+.claude/worktrees/
+
 # Build artifacts
 .build/
 *.xcuserdata*
