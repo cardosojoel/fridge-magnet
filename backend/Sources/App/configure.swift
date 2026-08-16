@@ -1,9 +1,13 @@
+import APNS
+import APNSCore
+import Crypto
 import Fluent
 import FluentPostgresDriver
 import FluentSQL
 import JKLarShared
 import JWT
 import Vapor
+import VaporAPNS
 
 /// `@main` do executável `App` — o único ponto de composição do processo (Fase 1
 /// estabelece esta convenção; planos seguintes acrescentam suas migrations, seus
@@ -101,6 +105,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(CreateHouseholdSchema(), to: .owner)
     app.migrations.add(CreateRefreshTokens(), to: .owner)
     app.migrations.add(CreateHouseholdInvites(), to: .owner)
+    app.migrations.add(CreateDeviceTokens(), to: .owner)
     try await app.autoMigrate().get()
 
     // MARK: Assinatura JWT — ES256, chave carregada do ambiente.
@@ -147,6 +152,32 @@ func configure(_ app: Application) async throws {
     }
     app.identityTokenVerifiers = identityTokenVerifiers
 
+    // MARK: Push notifications (APNs) — plano 01-11, D-16 opção c ("híbrido: cliente
+    // informa, backend corrige") aprovada no checkpoint da Task 1.
+    // Fora de `.testing`, a ausência de qualquer uma das quatro variáveis aborta o boot com
+    // mensagem explícita — mesma disciplina de `assertRuntimeDatabaseRole` logo abaixo:
+    // silêncio aqui significa "sobe e só falha no primeiro envio", o pior modo de falha
+    // possível para push (T-11-07).
+    if app.environment == .testing {
+        app.pushService = PushService(client: NoopPushClient())
+    } else {
+        let apnsConfig: APNSConfig
+        do {
+            apnsConfig = try APNSConfig.fromEnvironment()
+        } catch let error as APNSConfig.LoadError {
+            fatalError("Backend recusando subir: \(error.description)")
+        }
+        guard let privateKey = try? P256.Signing.PrivateKey(pemRepresentation: apnsConfig.privateKeyPEM) else {
+            fatalError("APNS_PRIVATE_KEY_P8 não é uma chave P-256 válida")
+        }
+        await app.apns.configure(.jwt(
+            privateKey: privateKey,
+            keyIdentifier: apnsConfig.keyID,
+            teamIdentifier: apnsConfig.teamID
+        ))
+        app.pushService = PushService(client: VaporAPNSPushClient(application: app, topic: apnsConfig.topic))
+    }
+
     // MARK: Asserção de papel de banco no boot.
     // Fora de `.testing`, servir com `jklar_owner` desativaria a Row-Level Security que o
     // plano 01-02 instala nas tabelas de tenant — e o sintoma seria silêncio: tudo
@@ -159,6 +190,12 @@ func configure(_ app: Application) async throws {
     app.get("health", use: healthCheck)
     try app.register(collection: AuthController())
     try app.register(collection: HouseholdController())
+    try app.register(collection: DeviceController())
+    // `POST /api/v1/dev/push-test` só existe em desenvolvimento — ausência de rota, não
+    // checagem em runtime (T-11-04, ver `DeviceController.registerDevRoutes`).
+    if app.environment == .development {
+        try DeviceController.registerDevRoutes(app)
+    }
 }
 
 /// `SELECT current_user` real contra o banco de runtime (`.psql`, papel `jklar_app`
