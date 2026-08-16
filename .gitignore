@@ -8,6 +8,7 @@
 # Secrets — chaves de assinatura JWT, DSNs, envs locais
 .env
 *.p8
+*.pem
 
 # Artefatos gerados pelo XcodeGen a partir de client/project.yml (plano 01-03) — nunca versionados
 client/JKLar.xcodeproj/

@@ -73,6 +73,15 @@ struct AuthController: RouteCollection {
         }
 
         let userID = try user.requireID()
+
+        // Plano 01-02: SessionResponse.household já existia no contrato (nulo) desde o
+        // plano 01-01 — este é o primeiro plano que o preenche, sem exigir recompilação de
+        // um cliente já publicado.
+        let householdSummary = try await HouseholdContextMiddleware.resolveHouseholdSummary(
+            userID: userID,
+            database: req.db
+        )
+
         let accessPayload = AccessTokenPayload(
             subject: SubjectClaim(value: userID.uuidString),
             expiration: .init(value: Date().addingTimeInterval(Self.accessTokenLifetime))
@@ -95,7 +104,7 @@ struct AuthController: RouteCollection {
             refreshToken: refreshToken,
             expiresIn: Int(Self.accessTokenLifetime),
             user: userDTO,
-            household: nil
+            household: householdSummary
         )
         return try Self.jsonResponse(response, status: .ok)
     }
