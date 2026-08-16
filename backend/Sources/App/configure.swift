@@ -1,6 +1,7 @@
 import Fluent
 import FluentPostgresDriver
 import FluentSQL
+import JKLarShared
 import JWT
 import Vapor
 
@@ -33,13 +34,14 @@ extension DatabaseID {
 }
 
 /// Configuração por provedor de identidade, lida do ambiente — nunca hardcoded, nunca
-/// versionada. Os três provedores já ficam previstos (D-01: Apple, Google, Microsoft);
-/// só a Apple tem verificador implementado nesta fatia (plano 01-01). Google e Microsoft
-/// chegam no plano 01-08.
+/// versionada. Os três provedores (D-01: Apple, Google, Microsoft) têm verificador
+/// implementado desde o plano 01-08. `jwksURL` para Apple/Google aponta direto ao endpoint
+/// JWKS do provedor; para Microsoft, aponta ao documento de descoberta OIDC da autoridade
+/// `common` — `MicrosoftTokenVerifier` lê `jwks_uri`/`issuer` dali em tempo de execução, sem
+/// nenhuma URL de JWKS adivinhada (T-08-04).
 struct ProviderConfig: Sendable {
     struct Provider: Sendable {
         var audience: String
-        var issuer: String
         var jwksURL: URI
     }
 
@@ -52,22 +54,19 @@ struct ProviderConfig: Sendable {
         if let appleAudience = Environment.get("APPLE_AUDIENCE") {
             config.apple = Provider(
                 audience: appleAudience,
-                issuer: "https://appleid.apple.com",
                 jwksURL: "https://appleid.apple.com/auth/keys"
             )
         }
         if let googleClientID = Environment.get("GOOGLE_CLIENT_ID") {
             config.google = Provider(
                 audience: googleClientID,
-                issuer: "https://accounts.google.com",
                 jwksURL: "https://www.googleapis.com/oauth2/v3/certs"
             )
         }
         if let microsoftClientID = Environment.get("MICROSOFT_CLIENT_ID") {
             config.microsoft = Provider(
                 audience: microsoftClientID,
-                issuer: "https://login.microsoftonline.com/common/v2.0",
-                jwksURL: "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+                jwksURL: "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration"
             )
         }
         return config
@@ -78,22 +77,10 @@ private struct ProviderConfigKey: StorageKey {
     typealias Value = ProviderConfig
 }
 
-private struct AppleTokenVerifierKey: StorageKey {
-    typealias Value = AppleTokenVerifier
-}
-
 extension Application {
     var providerConfig: ProviderConfig {
         get { self.storage[ProviderConfigKey.self] ?? .init() }
         set { self.storage[ProviderConfigKey.self] = newValue }
-    }
-
-    /// `nil` até `APPLE_AUDIENCE` existir no ambiente — só então o login com Apple fica
-    /// disponível. Guardado na `Application` (não recriado por request) porque o cache
-    /// interno do JWKS de `AppleTokenVerifier` precisa sobreviver entre requests.
-    var appleTokenVerifier: AppleTokenVerifier? {
-        get { self.storage[AppleTokenVerifierKey.self] }
-        set { self.storage[AppleTokenVerifierKey.self] = newValue }
     }
 }
 
@@ -130,15 +117,35 @@ func configure(_ app: Application) async throws {
     }
 
     // MARK: Provedores de identidade.
+    // Registro `[AuthProvider: any IdentityTokenVerifier]` montado a partir de
+    // `ProviderConfig` — só contém entradas para provedores com credenciais presentes no
+    // ambiente. `AuthController` resolve o verificador do `provider` do request por aqui,
+    // sem ramificar por provedor (plano 01-08).
     let providerConfig = ProviderConfig.fromEnvironment()
     app.providerConfig = providerConfig
+    var identityTokenVerifiers: [AuthProvider: any IdentityTokenVerifier] = [:]
     if let appleConfig = providerConfig.apple {
-        app.appleTokenVerifier = AppleTokenVerifier(
+        identityTokenVerifiers[.apple] = AppleTokenVerifier(
             client: app.client,
             jwksURL: appleConfig.jwksURL,
             audience: appleConfig.audience
         )
     }
+    if let googleConfig = providerConfig.google {
+        identityTokenVerifiers[.google] = GoogleTokenVerifier(
+            client: app.client,
+            jwksURL: googleConfig.jwksURL,
+            audience: googleConfig.audience
+        )
+    }
+    if let microsoftConfig = providerConfig.microsoft {
+        identityTokenVerifiers[.microsoft] = MicrosoftTokenVerifier(
+            client: app.client,
+            discoveryURL: microsoftConfig.jwksURL,
+            audience: microsoftConfig.audience
+        )
+    }
+    app.identityTokenVerifiers = identityTokenVerifiers
 
     // MARK: Asserção de papel de banco no boot.
     // Fora de `.testing`, servir com `jklar_owner` desativaria a Row-Level Security que o
