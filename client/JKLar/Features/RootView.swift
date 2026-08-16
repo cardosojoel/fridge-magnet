@@ -24,8 +24,7 @@ enum JKAppState: Equatable {
 /// Keychain chega no plano 01-05, e a leitura de pertencimento a uma casa chega no plano
 /// 01-07. Por isso a transição de `.loading` para `.signedOut` aqui é incondicional: não há
 /// sessão nenhuma para encontrar ainda, então o único destino possível hoje é a tela de
-/// login. `LoginView` ainda não existe nesta Task 1 (chega na Task 2 do mesmo plano), então
-/// `.signedOut` também resolve para um placeholder vazio até a Task 2 religar este `case`.
+/// login.
 struct RootView: View {
     @State private var state: JKAppState = .loading
 
@@ -34,9 +33,10 @@ struct RootView: View {
             switch state {
             case .loading:
                 ProgressView()
-            case .signedOut, .needsHousehold, .inHousehold:
-                // .signedOut é religado para `LoginView()` na Task 2 deste plano.
-                // .needsHousehold e .inHousehold chegam no plano 01-07.
+            case .signedOut:
+                LoginView()
+            case .needsHousehold, .inHousehold:
+                // Chegam no plano 01-07, sobre a sessão real ligada no plano 01-05.
                 EmptyView()
             }
         }
