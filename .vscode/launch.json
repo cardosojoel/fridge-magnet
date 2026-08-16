@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:jk-lar}/backend",
+            "name": "Debug App (backend)",
+            "target": "App",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug App (backend)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:jk-lar}/backend",
+            "name": "Release App (backend)",
+            "target": "App",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release App (backend)"
+        }
+    ]
+}
