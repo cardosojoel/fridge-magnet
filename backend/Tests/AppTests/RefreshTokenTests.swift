@@ -13,8 +13,10 @@ final class RefreshTokenTests: XCTestCase {
 
     /// Loga com um identity token Apple válido e devolve a `SessionResponse` completa —
     /// usado por todo teste que precisa de um refresh token real emitido pelo servidor.
-    private func login(app: Application) async throws -> SessionResponse {
-        let token = try await TestSupport.makeAppleIdentityToken()
+    /// `subject` fixo permite logar como o mesmo usuário mais de uma vez (Task 2: "segundo
+    /// login do mesmo usuário cria uma família nova").
+    private func login(app: Application, subject: String = UUID().uuidString) async throws -> SessionResponse {
+        let token = try await TestSupport.makeAppleIdentityToken(subject: subject)
         var captured: SessionResponse?
         try await app.testable().test(
             .POST, "/api/v1/auth/session",
@@ -207,6 +209,105 @@ final class RefreshTokenTests: XCTestCase {
 
             let second = try await postLogout(app: app, token: session.refreshToken)
             XCTAssertEqual(second, .noContent, "logout de um token já revogado continua respondendo 204")
+        }
+    }
+
+    // MARK: Task 2 — detecção de reuso revogando a família inteira de tokens
+
+    /// Cenário de roubo completo (T-04-01): T1 → T2 (rotação legítima) → T1 reapresentado
+    /// (sinal de reuso). A resposta é 401 e T2 — o token vivo até então — também passa a
+    /// ser rejeitado, porque a família inteira caiu. Prova ainda que toda linha daquele
+    /// `family_id` fica com `revoked_at` preenchido, e que a família de um segundo login
+    /// do mesmo usuário não é afetada.
+    func testReusedRefreshTokenRevokesFamily() async throws {
+        try await TestSupport.withApp { app in
+            let subject = UUID().uuidString
+            let session = try await login(app: app, subject: subject)
+            let t1 = session.refreshToken
+
+            let rotateToT2 = try await postRefresh(app: app, token: t1)
+            XCTAssertEqual(rotateToT2.status, .ok)
+            let t2 = try XCTUnwrap(rotateToT2.session).refreshToken
+
+            // Reapresenta T1, já rotacionado — a assinatura de roubo/replay.
+            let reuseAttempt = try await postRefresh(app: app, token: t1)
+            XCTAssertEqual(reuseAttempt.status, .unauthorized)
+            XCTAssertEqual(reuseAttempt.error?.code, .unauthorized)
+
+            // T2 era o token vivo até este ponto — a família inteira deve tê-lo derrubado.
+            let t2AfterReuse = try await postRefresh(app: app, token: t2)
+            XCTAssertEqual(
+                t2AfterReuse.status, .unauthorized,
+                "reapresentar um token já rotacionado deve revogar a família inteira, inclusive o token mais recente"
+            )
+
+            guard let originalRow = try await RefreshToken.query(on: app.db)
+                .filter(\.$tokenHash == sha256Hex(t1))
+                .first()
+            else {
+                return XCTFail("linha original de refresh_tokens não encontrada")
+            }
+            let familyID = originalRow.familyID
+
+            let familyRows = try await RefreshToken.query(on: app.db)
+                .filter(\.$familyID == familyID)
+                .all()
+            XCTAssertEqual(familyRows.count, 2, "T1 e T2 devem pertencer à mesma família")
+            for row in familyRows {
+                XCTAssertNotNil(row.revokedAt, "toda linha da família comprometida deve ter revoked_at preenchido")
+            }
+
+            // Segundo login do mesmo usuário — família nova, não afetada pela revogação acima.
+            let secondSession = try await login(app: app, subject: subject)
+            XCTAssertNotEqual(
+                secondSession.refreshToken, t1,
+                "um novo login deve emitir um refresh token novo, nunca reaproveitar um já revogado"
+            )
+            let secondRotation = try await postRefresh(app: app, token: secondSession.refreshToken)
+            XCTAssertEqual(
+                secondRotation.status, .ok,
+                "a revogação da família comprometida não pode afetar a família de um novo login do mesmo usuário"
+            )
+        }
+    }
+
+    /// Protege contra a implementação excessivamente agressiva que derrubaria a sessão de
+    /// todo mundo a cada renovação: uma cadeia de rotações normal (T1→T2→T3, nunca
+    /// reapresentando um token já usado) não pode disparar `revokeFamily` nenhuma vez.
+    func testNormalRotationChainDoesNotRevokeFamily() async throws {
+        try await TestSupport.withApp { app in
+            let session = try await login(app: app)
+
+            let rotateToT2 = try await postRefresh(app: app, token: session.refreshToken)
+            XCTAssertEqual(rotateToT2.status, .ok)
+            let t2 = try XCTUnwrap(rotateToT2.session).refreshToken
+
+            let rotateToT3 = try await postRefresh(app: app, token: t2)
+            XCTAssertEqual(rotateToT3.status, .ok)
+            let t3 = try XCTUnwrap(rotateToT3.session).refreshToken
+
+            guard let currentRow = try await RefreshToken.query(on: app.db)
+                .filter(\.$tokenHash == sha256Hex(t3))
+                .first()
+            else {
+                return XCTFail("T3 não encontrado em refresh_tokens")
+            }
+            XCTAssertNil(currentRow.revokedAt, "o token vivo mais recente da cadeia não pode estar revogado")
+
+            let familyRows = try await RefreshToken.query(on: app.db)
+                .filter(\.$familyID == currentRow.familyID)
+                .all()
+            XCTAssertEqual(familyRows.count, 3, "T1, T2 e T3 devem pertencer à mesma família")
+            let liveCount = familyRows.filter { $0.revokedAt == nil }.count
+            XCTAssertEqual(
+                liveCount, 1,
+                "rotação normal em cadeia revoga a linha antiga a cada passo, mas nunca a família inteira de uma vez"
+            )
+
+            // A cadeia continua funcionando token a token — nenhuma revogação de família a
+            // atrapalhou no caminho.
+            let rotateToT4 = try await postRefresh(app: app, token: t3)
+            XCTAssertEqual(rotateToT4.status, .ok)
         }
     }
 }

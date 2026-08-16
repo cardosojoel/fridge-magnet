@@ -60,8 +60,19 @@ struct SessionService {
             }
 
             guard locked.revokedAt == nil else {
-                // Um token revogado só existe depois de já ter sido rotacionado — a
-                // detecção de reuso (revogação de família inteira) chega na Task 2.
+                // Um token revogado só existe depois de já ter sido rotacionado — reapresentá-lo
+                // é a assinatura de roubo/replay (T-04-01). A revogação de família roda DENTRO
+                // desta mesma transação e o outcome é devolvido por `return` (não `throw`): se
+                // lançássemos aqui, `database.transaction` reverteria a UPDATE de `revokeFamily`
+                // junto com tudo o mais, e a família comprometida continuaria viva.
+                self.app.logger.warning(
+                    "refresh token reapresentado após rotação — revogando família",
+                    metadata: [
+                        "user_id": .string(locked.userID.uuidString),
+                        "family_id": .string(locked.familyID.uuidString),
+                    ]
+                )
+                try await self.revokeFamily(familyID: locked.familyID, on: transactionDB)
                 return .invalid
             }
 
@@ -108,6 +119,20 @@ struct SessionService {
         try await sql.raw("""
             UPDATE refresh_tokens SET revoked_at = now()
             WHERE token_hash = \(bind: tokenHash) AND revoked_at IS NULL
+            """).run()
+    }
+
+    /// Revoga toda a família de um refresh token roubado/reapresentado — chamada só por
+    /// `rotate` na detecção de reuso (T-04-01, plano 01-04 Task 2). Um único `UPDATE`
+    /// afeta toda a cadeia de rotações daquele login de uma vez; um segundo login do mesmo
+    /// usuário tem `family_id` diferente e não é afetado.
+    func revokeFamily(familyID: UUID, on database: any Database) async throws {
+        guard let sql = database as? SQLDatabase else {
+            fatalError("SessionService.revokeFamily exige um SQLDatabase (FluentSQL escape hatch)")
+        }
+        try await sql.raw("""
+            UPDATE refresh_tokens SET revoked_at = now()
+            WHERE family_id = \(bind: familyID) AND revoked_at IS NULL
             """).run()
     }
 
