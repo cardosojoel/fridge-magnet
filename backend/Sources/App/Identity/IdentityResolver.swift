@@ -1,18 +1,17 @@
 import Fluent
 import Foundation
 import JKLarShared
+import Vapor
 
 /// Resolve `(provider, subject, email, emailVerified)` já verificados para um `User`
 /// interno, criando quando ausente.
 ///
-/// Ordem desta fatia (01-RESEARCH.md Architecture Patterns > Pattern 1): (1) procurar
-/// `linked_identities` por `(provider, provider_subject)` — se achar, devolver o
-/// `user_id`; (2) senão, criar `users` + `linked_identities`. O degrau de unificação por
-/// e-mail verificado de D-03 é o passo intermediário que o plano 01-08 insere entre os
-/// dois — este resolvedor já nasce com a assinatura e a transação que ele exige.
-/// E-mail nunca vira chave estrangeira em lugar nenhum (Pitfall 4).
+/// RED temporário (plano 01-08 Task 2): esta versão só implementa a Etapa 1 (login
+/// recorrente por `(provider, subject)`) e a Etapa 3 (usuário novo) — a Etapa 2 de D-03
+/// (unificação por e-mail verificado) chega no commit GREEN seguinte.
 struct IdentityResolver {
     let database: any Database
+    let logger: Logger
 
     func resolve(
         provider: AuthProvider,

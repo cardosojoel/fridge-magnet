@@ -46,7 +46,7 @@ struct AuthController: RouteCollection {
             )
         }
 
-        let resolver = IdentityResolver(database: req.db)
+        let resolver = IdentityResolver(database: req.db, logger: req.logger)
         let user = try await resolver.resolve(
             provider: body.provider,
             subject: verified.subject,
