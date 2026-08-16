@@ -1,0 +1,54 @@
+name: JKLar
+options:
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
+    PRODUCT_BUNDLE_IDENTIFIER: com.jklar.app
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  JKLar:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - path: JKLar
+    info:
+      path: JKLar/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.jklar.app
+            CFBundleURLSchemes:
+              - jklar
+    entitlements:
+      path: JKLar/JKLar.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.developer.applesignin:
+          - Default
+    scheme:
+      testTargets:
+        - JKLarTests
+  JKLarTests:
+    type: bundle.unit-test
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - path: JKLarTests
+    dependencies:
+      - target: JKLar
+    settings:
+      base:
+        # XcodeGen infere TEST_HOST/BUNDLE_LOADER automaticamente a partir da dependência
+        # no target de app, mas usa o layout de bundle do iOS (executável direto dentro de
+        # `JKLar.app`). No macOS o executável fica em `JKLar.app/Contents/MacOS/JKLar` — sem
+        # este override condicional por SDK o teste hosted falha ao localizar o TEST_HOST no
+        # build de macOS ("Could not find test host for JKLarTests").
+        TEST_HOST[sdk=macosx*]: "$(BUILT_PRODUCTS_DIR)/JKLar.app/Contents/MacOS/JKLar"
