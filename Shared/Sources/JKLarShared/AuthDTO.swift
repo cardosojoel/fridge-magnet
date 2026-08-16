@@ -59,6 +59,37 @@ public struct HouseholdSummaryDTO: Codable, Sendable {
     }
 }
 
+/// Corpo de `POST /api/v1/auth/refresh` (plano 01-04) — a única credencial apresentada,
+/// já que a rota roda deliberadamente fora do `SessionAuthenticator` (o cliente chama
+/// `/refresh` justamente quando o access token já expirou).
+public struct RefreshRequest: Codable, Sendable {
+    public var refreshToken: String
+
+    public init(refreshToken: String) {
+        self.refreshToken = refreshToken
+    }
+}
+
+/// Corpo de `POST /api/v1/auth/logout` (plano 01-04) — marca o refresh token como
+/// revogado no servidor (D-11), não só no dispositivo.
+public struct LogoutRequest: Codable, Sendable {
+    public var refreshToken: String
+
+    public init(refreshToken: String) {
+        self.refreshToken = refreshToken
+    }
+}
+
+/// Constantes de duração de sessão lidas por cliente e servidor a partir de um único
+/// lugar (D-09) — nunca literais duplicados em `AuthController`/`SessionService` de um
+/// lado e no cliente do outro.
+public enum SessionPolicy {
+    /// Validade do access token — 900s (15 min).
+    public static let accessTokenLifetime: TimeInterval = 900
+    /// Validade do refresh token — 30 dias.
+    public static let refreshTokenLifetime: TimeInterval = 60 * 60 * 24 * 30
+}
+
 /// Resposta de sessão do JK Lar — devolvida por `POST /api/v1/auth/session` e, no plano
 /// 01-04, por `POST /api/v1/auth/refresh`.
 public struct SessionResponse: Codable, Sendable {

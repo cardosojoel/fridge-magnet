@@ -112,6 +112,7 @@ func configure(_ app: Application) async throws {
     // jklar_app nunca tem DDL, só o DML explicitamente concedido no fim de cada migration.
     app.migrations.add(CreateIdentitySchema(), to: .owner)
     app.migrations.add(CreateHouseholdSchema(), to: .owner)
+    app.migrations.add(CreateRefreshTokens(), to: .owner)
     try await app.autoMigrate().get()
 
     // MARK: Assinatura JWT — ES256, chave carregada do ambiente.

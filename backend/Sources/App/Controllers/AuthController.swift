@@ -13,12 +13,15 @@ import Vapor
 /// deste handler: nunca persistido, nunca logado, nunca devolvido (D-12) — é por isso que
 /// `identityToken` não aparece em nenhum outro arquivo de `backend/Sources/App`.
 struct AuthController: RouteCollection {
-    /// Duração do access token — 900s (15 min), D-09.
-    static let accessTokenLifetime: TimeInterval = 900
-
     func boot(routes: any RoutesBuilder) throws {
         let auth = routes.grouped("api", "v1", "auth")
         auth.post("session", use: session)
+        // `/refresh` e `/logout` ficam deliberadamente fora do `SessionAuthenticator`: o
+        // cliente chama `/refresh` justamente quando o access token já expirou, então
+        // exigir Bearer válido ali criaria um impasse (plano 01-04). O refresh token
+        // apresentado no corpo é a única credencial dessas duas rotas.
+        auth.post("refresh", use: refresh)
+        auth.post("logout", use: logout)
     }
 
     @Sendable
@@ -72,41 +75,44 @@ struct AuthController: RouteCollection {
             try await user.save(on: req.db)
         }
 
-        let userID = try user.requireID()
-
-        // Plano 01-02: SessionResponse.household já existia no contrato (nulo) desde o
-        // plano 01-01 — este é o primeiro plano que o preenche, sem exigir recompilação de
-        // um cliente já publicado.
-        let householdSummary = try await HouseholdContextMiddleware.resolveHouseholdSummary(
-            userID: userID,
-            database: req.db
-        )
-
-        let accessPayload = AccessTokenPayload(
-            subject: SubjectClaim(value: userID.uuidString),
-            expiration: .init(value: Date().addingTimeInterval(Self.accessTokenLifetime))
-        )
-        let accessToken = try await req.jwt.sign(accessPayload)
-
-        // Refresh token desta fatia: string opaca de 32 bytes aleatórios, devolvida ao
-        // cliente. Persistência com hash, rotação e revogação chegam no plano 01-04 — o
-        // campo do contrato existe desde agora (01-RESEARCH.md Pattern 3).
-        let refreshToken = [UInt8].random(count: 32).base64URLEncodedString()
-
-        let userDTO = UserDTO(
-            id: userID,
-            displayName: user.displayName,
+        // Plano 01-04: SessionService é o único lugar que emite, rotaciona ou revoga
+        // sessão — o login não monta mais o access/refresh token inline.
+        let sessionService = SessionService(app: req.application)
+        let response = try await sessionService.issueSession(
+            for: user,
             email: verified.email,
-            gender: user.gender.flatMap(Gender.init(rawValue:))
-        )
-        let response = SessionResponse(
-            accessToken: accessToken,
-            refreshToken: refreshToken,
-            expiresIn: Int(Self.accessTokenLifetime),
-            user: userDTO,
-            household: householdSummary
+            on: req.db
         )
         return try Self.jsonResponse(response, status: .ok)
+    }
+
+    /// `POST /api/v1/auth/refresh` — rotaciona um refresh token válido. `SessionService`
+    /// nunca diferencia token inexistente, expirado ou já revogado na resposta HTTP
+    /// (T-04-04): todos colapsam no mesmo 401 `.unauthorized`.
+    @Sendable
+    func refresh(req: Request) async throws -> Response {
+        let body = try req.content.decode(RefreshRequest.self)
+        let sessionService = SessionService(app: req.application)
+        do {
+            let response = try await sessionService.rotate(presentedToken: body.refreshToken, on: req.db)
+            return try Self.jsonResponse(response, status: .ok)
+        } catch is SessionService.SessionError {
+            return try Self.errorResponse(
+                code: .unauthorized,
+                message: "Sessão inválida ou expirada.",
+                status: .unauthorized
+            )
+        }
+    }
+
+    /// `POST /api/v1/auth/logout` — revoga o refresh token no servidor (D-11). Sempre 204,
+    /// exista o token ou não (idempotente, sem oráculo de existência).
+    @Sendable
+    func logout(req: Request) async throws -> Response {
+        let body = try req.content.decode(LogoutRequest.self)
+        let sessionService = SessionService(app: req.application)
+        try await sessionService.revoke(presentedToken: body.refreshToken, on: req.db)
+        return Response(status: .noContent)
     }
 
     private static func errorResponse(
@@ -137,16 +143,5 @@ struct AccessTokenPayload: JWTPayload {
 
     func verify(using algorithm: some JWTAlgorithm) async throws {
         try self.expiration.verifyNotExpired()
-    }
-}
-
-extension [UInt8] {
-    /// Base64url sem padding (RFC 4648 §5) — usado só para o refresh token opaco desta
-    /// fatia (a persistência com hash chega no plano 01-04).
-    func base64URLEncodedString() -> String {
-        Data(self).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
     }
 }
