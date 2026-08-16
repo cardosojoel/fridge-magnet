@@ -108,9 +108,10 @@ func configure(_ app: Application) async throws {
     app.databases.use(try .postgres(url: databaseURL), as: .psql)
     app.databases.use(try .postgres(url: databaseOwnerURL), as: .owner)
 
-    // A migration do plano de identidade roda no database owner — jklar_app nunca tem
-    // DDL, só o DML explicitamente concedido no fim da migration.
+    // As migrations dos planos de identidade e de tenant rodam no database owner —
+    // jklar_app nunca tem DDL, só o DML explicitamente concedido no fim de cada migration.
     app.migrations.add(CreateIdentitySchema(), to: .owner)
+    app.migrations.add(CreateHouseholdSchema(), to: .owner)
     try await app.autoMigrate().get()
 
     // MARK: Assinatura JWT — ES256, chave carregada do ambiente.
@@ -148,6 +149,7 @@ func configure(_ app: Application) async throws {
     // MARK: Rotas.
     app.get("health", use: healthCheck)
     try app.register(collection: AuthController())
+    try app.register(collection: HouseholdController())
 }
 
 /// `SELECT current_user` real contra o banco de runtime (`.psql`, papel `jklar_app`

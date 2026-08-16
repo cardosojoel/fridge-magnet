@@ -18,6 +18,8 @@ public enum APIErrorCode: String, Codable, Sendable {
     case inviteExpired
     case validation
     case internalError
+    /// `POST /api/v1/households` quando o usuário já pertence a uma casa (409) — plano 01-02.
+    case alreadyMember
 }
 
 /// Corpo de erro padrão devolvido por qualquer rota da API.

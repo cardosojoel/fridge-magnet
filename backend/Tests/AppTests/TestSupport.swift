@@ -17,6 +17,12 @@ import XCTVapor
 /// memória. O JWKS correspondente é servido por um `Client` falso registrado ANTES de
 /// `configure(_:)` rodar — `AppleTokenVerifier` nunca toca a rede real da Apple durante os
 /// testes.
+/// `DatabaseID` só de teste — a segunda conexão `jklar_app` independente usada por
+/// `TestSupport.withAppRoleConnection` (plano 01-02, `RLSIsolationTests`).
+extension DatabaseID {
+    static var appRoleTestConnection: DatabaseID { .init(string: "appRoleTestConnection") }
+}
+
 enum TestSupport {
     static let testAppleAudience = "com.jklar.app.test"
     static let testAppleKeyID = "test-apple-key-1"
@@ -80,13 +86,80 @@ enum TestSupport {
     }
 
     /// `TRUNCATE` via conexão owner — chamado dentro de `makeApp()`. Cada teste começa com
-    /// `users`/`linked_identities` vazias, mesmo rodando contra o mesmo banco `jklar_test`
-    /// persistente entre execuções da suíte.
+    /// as quatro tabelas de identidade e de tenant vazias, mesmo rodando contra o mesmo
+    /// banco `jklar_test` persistente entre execuções da suíte.
+    ///
+    /// A conexão owner ignora a policy RLS de `households`/`household_members` só porque
+    /// `TRUNCATE` (ao contrário de `SELECT`/`DELETE`) não é filtrado por Row-Level Security
+    /// no PostgreSQL — é uma operação de nível de tabela inteira, não de linha.
     static func cleanIdentityTables(_ app: Application) async throws {
         guard let sql = app.db(.owner) as? SQLDatabase else {
             fatalError("Banco owner não é um SQLDatabase — não é possível truncar as tabelas de teste")
         }
-        try await sql.raw("TRUNCATE TABLE linked_identities, users RESTART IDENTITY CASCADE").run()
+        try await sql.raw("""
+            TRUNCATE TABLE household_members, households, linked_identities, users
+            RESTART IDENTITY CASCADE
+            """).run()
+    }
+
+    // MARK: Plano 01-02 — plano de tenant
+
+    /// Cria um `User` mínimo direto no banco (sem passar por `/auth/session`) — usado pelos
+    /// testes do plano de tenant, que não precisam re-testar o fluxo de login em si.
+    static func createTestUser(app: Application, displayName: String? = nil) async throws -> User {
+        let user = User(displayName: displayName)
+        try await user.save(on: app.db)
+        return user
+    }
+
+    /// Assina um access token do JK Lar (não um identity token de provedor) para `userID` —
+    /// o mesmo `AccessTokenPayload` que `AuthController` emite, usado pelos testes do plano
+    /// de tenant para autenticar chamadas a `POST /api/v1/households` e
+    /// `GET /api/v1/households/current` sem depender de `/auth/session`.
+    static func makeAccessToken(app: Application, userID: UUID) async throws -> String {
+        let payload = AccessTokenPayload(
+            subject: SubjectClaim(value: userID.uuidString),
+            expiration: .init(value: Date().addingTimeInterval(900))
+        )
+        return try await app.jwt.keys.sign(payload)
+    }
+
+    /// Uma conexão Postgres separada, autenticada como `jklar_app` (não `jklar_owner`) —
+    /// usada só por `RLSIsolationTests` para provar isolamento entre casas com um papel de
+    /// banco sujeito de verdade às policies (o app inteiro já roda como `jklar_app` via
+    /// `DATABASE_URL`; este helper abre uma segunda conexão independente da `Application`
+    /// para poder controlar exatamente qual contexto de tenant está ativo em cada asserção,
+    /// sem interferir na conexão de runtime do app de teste).
+    ///
+    /// `householdID`, se não `nil`, aplica `app.current_household_id` via
+    /// `set_config(..., true)` (equivalente a `SET LOCAL`) dentro de uma transação aberta
+    /// para toda a duração de `body` — nunca fora de transação, pelo mesmo motivo do
+    /// `HouseholdContextMiddleware` de produção. `nil` deixa a conexão sem nenhum contexto
+    /// de casa aplicado, para o caso "fail-closed sem contexto" do `<behavior>`.
+    static func withAppRoleConnection<T: Sendable>(
+        app: Application,
+        householdID: UUID? = nil,
+        userID: UUID? = nil,
+        _ body: @escaping @Sendable (any SQLDatabase) async throws -> T
+    ) async throws -> T {
+        let appPassword = ProcessInfo.processInfo.environment["JKLAR_APP_PASSWORD"] ?? "REMOVIDO"
+        let dsn = "postgres://jklar_app:\(appPassword)@127.0.0.1:5432/jklar_test?sslmode=disable"
+        app.databases.use(try .postgres(url: dsn), as: .appRoleTestConnection)
+
+        return try await app.db(.appRoleTestConnection).transaction { transactionDB in
+            guard let sql = transactionDB as? SQLDatabase else {
+                fatalError("Conexão de teste não é um SQLDatabase")
+            }
+            if let userID {
+                try await sql.raw("SELECT set_config('app.current_user_id', \(bind: userID.uuidString), true)").run()
+            }
+            if let householdID {
+                try await sql.raw(
+                    "SELECT set_config('app.current_household_id', \(bind: householdID.uuidString), true)"
+                ).run()
+            }
+            return try await body(sql)
+        }
     }
 
     /// JWK público correspondente a `appleSigningKey`, no formato servido por
