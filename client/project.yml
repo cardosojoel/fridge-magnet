@@ -11,12 +11,21 @@ settings:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
+packages:
+  # Pacote SPM local — contrato de DTOs compartilhado com o backend (plano 01-01, ver
+  # Shared/Package.swift). O cliente importa `JKLarShared` para falar exatamente a mesma
+  # forma de request/response que `AuthController`/`HouseholdController` esperam, sem
+  # duplicar `SessionRequest`/`SessionResponse`/`HouseholdDTO` como structs locais.
+  JKLarShared:
+    path: ../Shared
 targets:
   JKLar:
     type: application
     supportedDestinations: [iOS, macOS]
     sources:
       - path: JKLar
+    dependencies:
+      - package: JKLarShared
     info:
       path: JKLar/Info.plist
       properties:
@@ -27,6 +36,10 @@ targets:
           - CFBundleURLName: com.jklar.app
             CFBundleURLSchemes:
               - jklar
+        # Único outro conhecimento do cliente sobre o backend além do 127.0.0.1 de DEBUG em
+        # APIConfiguration.swift (regra zero-trust do CLAUDE.md) — placeholder até a Fase 10
+        # decidir o hosting real (Fly.io/Railway, STACK.md); não é lido em builds DEBUG.
+        JKLarAPIBaseURL: "https://api.jklar.app"
     entitlements:
       path: JKLar/JKLar.entitlements
       properties:
@@ -44,6 +57,7 @@ targets:
       - path: JKLarTests
     dependencies:
       - target: JKLar
+      - package: JKLarShared
     settings:
       base:
         # XcodeGen infere TEST_HOST/BUNDLE_LOADER automaticamente a partir da dependência

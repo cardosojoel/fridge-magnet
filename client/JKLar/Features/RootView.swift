@@ -20,29 +20,41 @@ enum JKAppState: Equatable {
 
 /// Roteador de estado do app inteiro. `JKLarApp` injeta esta view na `WindowGroup`.
 ///
-/// Nesta fatia (01-03) não existe nenhum serviço de sessão real ainda — a leitura do
-/// Keychain chega no plano 01-05, e a leitura de pertencimento a uma casa chega no plano
-/// 01-07. Por isso a transição de `.loading` para `.signedOut` aqui é incondicional: não há
-/// sessão nenhuma para encontrar ainda, então o único destino possível hoje é a tela de
-/// login.
+/// `SessionStore` (plano 01-05) é a única fonte do estado — `RootView` nunca decide
+/// navegação por conta própria, só reflete `sessionStore.state`. Ao lançar, hidrata a sessão
+/// do Keychain (`.loading` → `.signedOut`/`.needsHousehold`/`.inHousehold`, conforme o que o
+/// servidor confirmar).
 struct RootView: View {
-    @State private var state: JKAppState = .loading
+    @State private var sessionStore = SessionStore()
 
     var body: some View {
         Group {
-            switch state {
+            switch sessionStore.state {
             case .loading:
                 ProgressView()
             case .signedOut:
                 LoginView()
-            case .needsHousehold, .inHousehold:
-                // Chegam no plano 01-07, sobre a sessão real ligada no plano 01-05.
-                EmptyView()
+            case .needsHousehold:
+                // Onboarding real de criar/entrar em casa é escopo do plano 01-07 — este é
+                // um destino mínimo, não um beco sem saída.
+                Text(JKCopy.needsHouseholdPlaceholder)
+                    .font(JKTypography.body)
+                    .multilineTextAlignment(.center)
+                    .padding(JKSpacing.lg)
+                    .jkGlassBackground()
+            case .inHousehold:
+                // Tela real da casa é escopo do plano 01-07 — este é um destino mínimo, não
+                // um beco sem saída.
+                Text(JKCopy.inHouseholdPlaceholderPrefix + (sessionStore.household?.name ?? ""))
+                    .font(JKTypography.body)
+                    .multilineTextAlignment(.center)
+                    .padding(JKSpacing.lg)
+                    .jkGlassBackground()
             }
         }
+        .environment(sessionStore)
         .task {
-            // TODO(01-05): substituir por leitura real da sessão no Keychain.
-            state = .signedOut
+            await sessionStore.hydrate()
         }
     }
 }
