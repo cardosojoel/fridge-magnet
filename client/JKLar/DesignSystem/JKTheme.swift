@@ -85,6 +85,12 @@ enum JKCopy {
     static let loginTagline = "A casa toda em um só lugar."
     static let loginErrorMessage = "Não foi possível entrar. Verifique sua conexão e tente novamente."
     static let loginErrorRetry = "Tentar de novo"
+    /// String exata do Copywriting Contract (01-UI-SPEC.md § Copywriting Contract, linha
+    /// "Login — Google button") — segundo botão, na ordem Apple → Google → Microsoft (D-01).
+    static let loginContinueWithGoogle = "Continuar com o Google"
+    /// String exata do Copywriting Contract (linha "Login — Microsoft button") — terceiro
+    /// botão.
+    static let loginContinueWithMicrosoft = "Continuar com a Microsoft"
 
     /// Cópia genérica reusável entre contextos ("Tentar de novo" inline) — não listada no
     /// `<files>` do plano 01-07, mas necessária para o gate de grep contra string solta em

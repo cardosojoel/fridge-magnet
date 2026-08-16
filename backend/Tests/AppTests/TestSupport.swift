@@ -27,6 +27,15 @@ enum TestSupport {
     static let testAppleAudience = "com.jklar.app.test"
     static let testAppleKeyID = "test-apple-key-1"
 
+    /// Plano 01-08 — mesma forma da Apple, uma chave/kid por provedor para que o caso
+    /// "assinado pela chave errada" prove algo real (assinar com a chave da Apple e
+    /// apresentar como Google, por exemplo, também deve falhar, já que os JWKS nunca se
+    /// misturam).
+    static let testGoogleAudience = "google-client-id.test.googleusercontent.com"
+    static let testGoogleKeyID = "test-google-key-1"
+    static let testMicrosoftAudience = "00000000-test-microsoft-client-id"
+    static let testMicrosoftKeyID = "test-microsoft-key-1"
+
     /// Chave RSA "oficial" — a que o JWKS de teste publica. Gerada uma vez por processo de
     /// teste (2048 bits é rápido o bastante para não estourar o orçamento de latência de
     /// 60s da suíte completa).
@@ -36,9 +45,18 @@ enum TestSupport {
         try! _RSA.Signing.PrivateKey(keySize: .bits2048)
     }()
 
-    /// Uma segunda chave, nunca publicada no JWKS servido pelos testes — usada só pelo
-    /// caso "chave errada" da matriz de rejeição (Task 2): um token assinado por ela nunca
-    /// deve verificar, porque nenhum JWK conhecido corresponde a ela.
+    static let googleSigningKey: _RSA.Signing.PrivateKey = {
+        try! _RSA.Signing.PrivateKey(keySize: .bits2048)
+    }()
+
+    static let microsoftSigningKey: _RSA.Signing.PrivateKey = {
+        try! _RSA.Signing.PrivateKey(keySize: .bits2048)
+    }()
+
+    /// Uma segunda chave, nunca publicada em nenhum dos três JWKS servidos pelos testes —
+    /// usada pelo caso "chave errada" da matriz de rejeição (planos 01-01 Task 2 e 01-08
+    /// Task 1): um token assinado por ela nunca deve verificar, porque nenhum JWK
+    /// conhecido corresponde a ela, em nenhum dos três provedores.
     static let rogueSigningKey: _RSA.Signing.PrivateKey = {
         try! _RSA.Signing.PrivateKey(keySize: .bits2048)
     }()
@@ -58,13 +76,16 @@ enum TestSupport {
             1
         )
         setenv("APPLE_AUDIENCE", testAppleAudience, 1)
+        setenv("GOOGLE_CLIENT_ID", testGoogleAudience, 1)
+        setenv("MICROSOFT_CLIENT_ID", testMicrosoftAudience, 1)
 
         let app = try await Application.make(.testing)
 
-        // Registrado ANTES de configure(_:) — é lido em configure() ao construir o
-        // AppleTokenVerifier, então precisa existir antes dessa leitura.
+        // Registrado ANTES de configure(_:) — é lido em configure() ao construir os três
+        // verificadores, então precisa existir antes dessa leitura. Um único `Client` falso
+        // roteia por URL entre os três JWKS/documento de descoberta (plano 01-08).
         app.clients.use { appInstance in
-            AppleJWKSStubClient(eventLoop: appInstance.eventLoopGroup.any())
+            ProviderJWKSStubClient(eventLoop: appInstance.eventLoopGroup.any())
         }
 
         try await configure(app)
@@ -210,28 +231,166 @@ enum TestSupport {
         )
         return try await keys.sign(payload, kid: JWKIdentifier(string: kid))
     }
+
+    // MARK: Plano 01-08 — Google e Microsoft
+
+    /// JWK público correspondente a `googleSigningKey`, no formato servido por
+    /// `https://www.googleapis.com/oauth2/v3/certs`.
+    static func googleJWKS() throws -> JWKS {
+        let publicKey = try Insecure.RSA.PublicKey(backing: googleSigningKey.publicKey)
+        let primitives = try publicKey.getKeyPrimitives()
+        let jwk = JWK.rsa(
+            .rs256,
+            identifier: JWKIdentifier(string: testGoogleKeyID),
+            modulus: primitives.modulus.base64URLEncodedString(),
+            exponent: primitives.publicExponent.base64URLEncodedString()
+        )
+        return JWKS(keys: [jwk])
+    }
+
+    /// JWK público correspondente a `microsoftSigningKey`, no formato servido pelo
+    /// `jwks_uri` do documento de descoberta da autoridade `common`.
+    static func microsoftJWKS() throws -> JWKS {
+        let publicKey = try Insecure.RSA.PublicKey(backing: microsoftSigningKey.publicKey)
+        let primitives = try publicKey.getKeyPrimitives()
+        let jwk = JWK.rsa(
+            .rs256,
+            identifier: JWKIdentifier(string: testMicrosoftKeyID),
+            modulus: primitives.modulus.base64URLEncodedString(),
+            exponent: primitives.publicExponent.base64URLEncodedString()
+        )
+        return JWKS(keys: [jwk])
+    }
+
+    /// URL de JWKS que o documento de descoberta falso de teste anuncia — a mesma URL real
+    /// que `https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration`
+    /// devolve em produção (confirmado por request real em 2026-08-16), servida aqui só
+    /// para o roteador de `ProviderJWKSStubClient` distinguir a chamada de JWKS da chamada
+    /// de descoberta.
+    static let microsoftTestJWKSURI = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+
+    private struct DiscoveryDocumentPayload: Encodable {
+        var jwksURI: String
+        var issuer: String
+        enum CodingKeys: String, CodingKey {
+            case jwksURI = "jwks_uri"
+            case issuer
+        }
+    }
+
+    /// Documento de descoberta OIDC falso — mesmo formato e mesmos valores reais de
+    /// `jwks_uri`/`issuer` que a autoridade `common` da Microsoft devolve hoje, para que
+    /// `MicrosoftTokenVerifier` exercite seu caminho de leitura dinâmica sem tocar a rede.
+    static func microsoftDiscoveryDocument() -> some Encodable {
+        DiscoveryDocumentPayload(
+            jwksURI: microsoftTestJWKSURI,
+            issuer: "https://login.microsoftonline.com/{tenantid}/v2.0"
+        )
+    }
+
+    /// Assina um id_token do Google falso, com todas as claims parametrizáveis — mesma
+    /// forma de `makeAppleIdentityToken`.
+    static func makeGoogleIdentityToken(
+        subject: String = UUID().uuidString,
+        email: String? = "member@example.com",
+        emailVerified: Bool? = true,
+        issuer: String = "https://accounts.google.com",
+        audience: String = TestSupport.testGoogleAudience,
+        expiration: Date = Date().addingTimeInterval(300),
+        signingKey: _RSA.Signing.PrivateKey? = nil,
+        kid: String = TestSupport.testGoogleKeyID
+    ) async throws -> String {
+        let keys = JWTKeyCollection()
+        let rsaPrivateKey = try Insecure.RSA.PrivateKey(backing: signingKey ?? googleSigningKey)
+        await keys.add(rsa: rsaPrivateKey, digestAlgorithm: .sha256, kid: JWKIdentifier(string: kid))
+
+        let payload = GoogleIdentityToken(
+            issuer: IssuerClaim(value: issuer),
+            subject: SubjectClaim(value: subject),
+            audience: AudienceClaim(value: audience),
+            authorizedPresenter: audience,
+            issuedAt: IssuedAtClaim(value: Date()),
+            expires: ExpirationClaim(value: expiration),
+            email: email,
+            emailVerified: emailVerified.map(BoolClaim.init(value:))
+        )
+        return try await keys.sign(payload, kid: JWKIdentifier(string: kid))
+    }
+
+    /// Assina um id_token da Microsoft falso. `tenantID` é sempre um GUID (a Microsoft
+    /// sempre inclui `tid`, inclusive para contas pessoais — o GUID fixo
+    /// `9188040d-6c67-4c5b-b112-36a304b66dad`); `issuer`, quando `nil`, é derivado
+    /// corretamente de `tenantID` — passar um `issuer` explícito é o que produz o caso
+    /// "token de outro tenant" da matriz de rejeição (Task 1).
+    static func makeMicrosoftIdentityToken(
+        subject: String = UUID().uuidString,
+        email: String? = "member@example.com",
+        preferredUsername: String? = nil,
+        emailVerified: Bool? = true,
+        tenantID: String = "9188040d-6c67-4c5b-b112-36a304b66dad",
+        issuer: String? = nil,
+        audience: String = TestSupport.testMicrosoftAudience,
+        expiration: Date = Date().addingTimeInterval(300),
+        signingKey: _RSA.Signing.PrivateKey? = nil,
+        kid: String = TestSupport.testMicrosoftKeyID
+    ) async throws -> String {
+        let keys = JWTKeyCollection()
+        let rsaPrivateKey = try Insecure.RSA.PrivateKey(backing: signingKey ?? microsoftSigningKey)
+        await keys.add(rsa: rsaPrivateKey, digestAlgorithm: .sha256, kid: JWKIdentifier(string: kid))
+
+        let effectiveIssuer = issuer ?? "https://login.microsoftonline.com/\(tenantID)/v2.0"
+
+        let payload = MicrosoftIdentityToken(
+            subject: SubjectClaim(value: subject),
+            issuer: IssuerClaim(value: effectiveIssuer),
+            audience: AudienceClaim(value: audience),
+            expiration: ExpirationClaim(value: expiration),
+            tenantID: tenantID,
+            email: email,
+            preferredUsername: preferredUsername,
+            emailVerified: emailVerified
+        )
+        return try await keys.sign(payload, kid: JWKIdentifier(string: kid))
+    }
 }
 
-/// `Client` falso que sempre serve o JWKS de teste (`TestSupport.jwks()`) — para que
-/// `AppleTokenVerifier` nunca faça uma chamada de rede real durante os testes. Registrado
-/// via `app.clients.use(...)` em `TestSupport.makeApp()`.
-struct AppleJWKSStubClient: Client {
+/// `Client` falso que roteia por URL entre os três JWKS/documento de descoberta de teste —
+/// para que nenhum dos três verificadores (Apple, Google, Microsoft) jamais toque a rede
+/// real durante os testes. Registrado via `app.clients.use(...)` em
+/// `TestSupport.makeApp()`, antes de `configure(_:)` construir os verificadores.
+struct ProviderJWKSStubClient: Client {
     let eventLoop: EventLoop
 
     func delegating(to eventLoop: EventLoop) -> Client {
-        AppleJWKSStubClient(eventLoop: eventLoop)
+        ProviderJWKSStubClient(eventLoop: eventLoop)
     }
 
     func send(_ request: ClientRequest) -> EventLoopFuture<ClientResponse> {
         eventLoop.makeFutureWithTask {
-            let jwks = try TestSupport.jwks()
-            let data = try JSONEncoder().encode(jwks)
-            var buffer = ByteBufferAllocator().buffer(capacity: data.count)
-            buffer.writeBytes(data)
-            var headers = HTTPHeaders()
-            headers.add(name: .contentType, value: "application/json")
-            return ClientResponse(status: .ok, headers: headers, body: buffer)
+            let url = request.url.string
+            if url.contains("appleid.apple.com") {
+                return try Self.jsonResponse(TestSupport.jwks())
+            }
+            if url.contains("googleapis.com") {
+                return try Self.jsonResponse(TestSupport.googleJWKS())
+            }
+            if url.contains("well-known/openid-configuration") {
+                return try Self.jsonResponse(TestSupport.microsoftDiscoveryDocument())
+            }
+            if url == TestSupport.microsoftTestJWKSURI || url.contains("login.microsoftonline.com") {
+                return try Self.jsonResponse(TestSupport.microsoftJWKS())
+            }
+            return ClientResponse(status: .notFound)
         }
+    }
+
+    private static func jsonResponse(_ value: some Encodable) throws -> ClientResponse {
+        let data = try JSONEncoder().encode(value)
+        var buffer = ByteBufferAllocator().buffer(capacity: data.count)
+        buffer.writeBytes(data)
+        var headers = HTTPHeaders()
+        headers.add(name: .contentType, value: "application/json")
+        return ClientResponse(status: .ok, headers: headers, body: buffer)
     }
 }
 

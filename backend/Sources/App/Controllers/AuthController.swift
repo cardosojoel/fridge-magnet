@@ -7,11 +7,13 @@ import Vapor
 /// `POST /api/v1/auth/session` — verifica um identity token de provedor, resolve a
 /// identidade interna e emite um JWT próprio do JK Lar.
 ///
-/// Só `.apple` tem verificador implementado nesta fatia; `.google` e `.microsoft`
-/// respondem 501 até o plano 01-08 (D-01: a ordem de botões no cliente já prevê os três).
-/// O identity token do provedor (`body.identityToken`) é usado e descartado no escopo
-/// deste handler: nunca persistido, nunca logado, nunca devolvido (D-12) — é por isso que
-/// `identityToken` não aparece em nenhum outro arquivo de `backend/Sources/App`.
+/// Os três provedores (Apple, Google, Microsoft — D-01) passam pelo mesmo caminho desde o
+/// plano 01-08: `AuthController` seleciona o verificador pelo registro
+/// `Application.identityTokenVerifiers`, montado em `configure.swift` a partir de
+/// `ProviderConfig`, sem ramificar por provedor. O identity token do provedor
+/// (`body.identityToken`) é usado e descartado no escopo deste handler: nunca persistido,
+/// nunca logado, nunca devolvido (D-12) — é por isso que `identityToken` não aparece em
+/// nenhum outro arquivo de `backend/Sources/App`.
 struct AuthController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         let auth = routes.grouped("api", "v1", "auth")
@@ -34,31 +36,23 @@ struct AuthController: RouteCollection {
     func session(req: Request) async throws -> Response {
         let body = try req.content.decode(SessionRequest.self)
 
+        guard let verifier = req.application.identityTokenVerifiers[body.provider] else {
+            req.logger.error("Nenhuma credencial configurada para o provedor \(body.provider.rawValue) — verifique o ambiente")
+            throw Abort(.internalServerError)
+        }
+
         let verified: VerifiedIdentity
-        switch body.provider {
-        case .apple:
-            guard let verifier = req.application.appleTokenVerifier else {
-                req.logger.error("APPLE_AUDIENCE não configurada — login com Apple indisponível")
-                throw Abort(.internalServerError)
-            }
-            do {
-                verified = try await verifier.verify(body.identityToken)
-            } catch {
-                return try Self.errorResponse(
-                    code: .invalidToken,
-                    message: "Token de identidade inválido.",
-                    status: .unauthorized
-                )
-            }
-        case .google, .microsoft:
+        do {
+            verified = try await verifier.verify(body.identityToken)
+        } catch {
             return try Self.errorResponse(
-                code: .validation,
-                message: "Provedor ainda não suportado.",
-                status: .notImplemented
+                code: .invalidToken,
+                message: "Token de identidade inválido.",
+                status: .unauthorized
             )
         }
 
-        let resolver = IdentityResolver(database: req.db)
+        let resolver = IdentityResolver(database: req.db, logger: req.logger)
         let user = try await resolver.resolve(
             provider: body.provider,
             subject: verified.subject,

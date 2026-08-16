@@ -2,17 +2,18 @@ import Foundation
 import JWT
 import Vapor
 
-/// Verifica um identity token da Apple contra o JWKS publicado em
-/// `https://appleid.apple.com/auth/keys`, cacheado por TTL (a Apple rotaciona chaves
-/// periodicamente). O `Client` HTTP e a URL do JWKS são injetáveis — os testes de
-/// `AuthControllerTests` apontam para um `Client` falso que serve um JWKS estático em
-/// memória, sem nunca tocar a rede real da Apple.
+/// Verifica um id_token do Google contra o JWKS publicado em
+/// `https://www.googleapis.com/oauth2/v3/certs`, cacheado por TTL. `Client` HTTP e URL do
+/// JWKS injetáveis — mesma forma de `AppleTokenVerifier`, para os testes de
+/// `ProviderVerifierTests` nunca tocarem a rede real do Google.
 ///
-/// Reaproveita `AppleIdentityToken` do próprio `vapor/jwt` (que já valida `iss` e `exp` em
-/// `verify(using:)`) em vez de redeclarar essas claims — "Don't Hand-Roll" (01-RESEARCH.md).
-/// A checagem de `aud` fica aqui porque a audience é lida do `ProviderConfig` desta app,
-/// não hardcoded.
-actor AppleTokenVerifier {
+/// Reaproveita `GoogleIdentityToken` do próprio `jwt-kit` (que já valida `iss` — nas duas
+/// formas que o Google emite, `https://accounts.google.com` e `accounts.google.com` — e
+/// `exp` em `verify(using:)`) em vez de redeclarar essas claims — "Don't Hand-Roll"
+/// (01-RESEARCH.md), mesmo padrão de `AppleTokenVerifier` reaproveitando
+/// `AppleIdentityToken`. A checagem de `aud` fica aqui porque a audience é lida do
+/// `ProviderConfig` desta app, não hardcoded.
+actor GoogleTokenVerifier {
     private let client: any Client
     private let jwksURL: URI
     private let audience: String
@@ -23,7 +24,7 @@ actor AppleTokenVerifier {
 
     init(
         client: any Client,
-        jwksURL: URI = "https://appleid.apple.com/auth/keys",
+        jwksURL: URI = "https://www.googleapis.com/oauth2/v3/certs",
         audience: String,
         cacheTTL: TimeInterval = 3600
     ) {
@@ -33,12 +34,12 @@ actor AppleTokenVerifier {
         self.cacheTTL = cacheTTL
     }
 
-    /// Verifica assinatura (contra o JWKS cacheado) e claims `iss`/`aud`/`exp`. Qualquer
-    /// falha vira `InvalidIdentityTokenError`, sem distinguir o motivo.
+    /// `email_verified` ausente é tratado como falso (T-08-06) — nunca verdadeiro por
+    /// omissão; é essa omissão que alimentaria a unificação indevida de conta da Task 2.
     func verify(_ token: String) async throws -> VerifiedIdentity {
         do {
             let keys = try await currentKeys()
-            let payload = try await keys.verify(token, as: AppleIdentityToken.self)
+            let payload = try await keys.verify(token, as: GoogleIdentityToken.self)
             try payload.audience.verifyIntendedAudience(includes: audience)
 
             return VerifiedIdentity(
@@ -74,4 +75,4 @@ actor AppleTokenVerifier {
     }
 }
 
-extension AppleTokenVerifier: IdentityTokenVerifier {}
+extension GoogleTokenVerifier: IdentityTokenVerifier {}
