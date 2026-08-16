@@ -113,6 +113,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(CreateIdentitySchema(), to: .owner)
     app.migrations.add(CreateHouseholdSchema(), to: .owner)
     app.migrations.add(CreateRefreshTokens(), to: .owner)
+    app.migrations.add(CreateHouseholdInvites(), to: .owner)
     try await app.autoMigrate().get()
 
     // MARK: Assinatura JWT — ES256, chave carregada do ambiente.

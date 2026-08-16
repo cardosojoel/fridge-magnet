@@ -20,6 +20,10 @@ public enum APIErrorCode: String, Codable, Sendable {
     case internalError
     /// `POST /api/v1/households` quando o usuário já pertence a uma casa (409) — plano 01-02.
     case alreadyMember
+    /// `PATCH /api/v1/households/current/members/:memberID/role` (409) — rebaixar este
+    /// membro deixaria a casa sem nenhum admin. Plano 01-06; reaproveitado pelo plano 01-10
+    /// nas rotas de remoção e saída, que podem violar a mesma invariante.
+    case lastAdmin
 }
 
 /// Corpo de erro padrão devolvido por qualquer rota da API.
