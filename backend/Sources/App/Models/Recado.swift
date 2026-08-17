@@ -25,6 +25,21 @@ final class Recado: Model, @unchecked Sendable {
     @Field(key: "sequence")
     var sequence: Int64
 
+    /// Instante de fixação (D-14, plano 02-11) — `nil` é "não fixado". Coluna aditiva de
+    /// `AddRecadoPinAndArchive`; ordena SÓ o bloco de fixados (mais recente primeiro). A
+    /// ordenação do fluxo cronológico do feed continua sendo `sequence`, nunca esta coluna.
+    /// Atribuída por propriedade pelos handlers (`pin`/`unpin`), nunca pelo `init`.
+    @OptionalField(key: "pinned_at")
+    var pinnedAt: Date?
+
+    /// Instante de arquivamento (D-15, plano 02-11) — `nil` é "não arquivado". Coluna
+    /// aditiva de `AddRecadoPinAndArchive`; um recado com valor aqui é invisível no feed e
+    /// em toda rota de recado por id (filtro padrão de `loadRecadoOrNotFound`). A ordenação
+    /// do fluxo do feed continua sendo `sequence`, nunca esta coluna — desarquivar devolve
+    /// o recado à posição cronológica natural dele.
+    @OptionalField(key: "archived_at")
+    var archivedAt: Date?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 

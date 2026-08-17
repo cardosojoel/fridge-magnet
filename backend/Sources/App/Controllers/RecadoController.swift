@@ -53,6 +53,11 @@ struct RecadoController: RouteCollection {
         scoped.delete(":recadoID", "reactions", use: clearReaction)
         scoped.get(":recadoID", "comments", use: comments)
         scoped.post(":recadoID", "comments", use: createComment)
+        // D-14: fixar/desafixar — autor-ou-admin, decidido no handler (`authorOrAdminGuard`
+        // contra o papel de `req.householdContext`). As duas rotas não leem corpo nenhum:
+        // não existe campo que o cliente possa mandar que altere a decisão.
+        scoped.put(":recadoID", "pin", use: pin)
+        scoped.delete(":recadoID", "pin", use: unpin)
     }
 
     // MARK: POST /api/v1/recados
@@ -124,7 +129,9 @@ struct RecadoController: RouteCollection {
             isComment: false
         )
 
-        let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB, logger: req.logger)
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+        )
         return try Self.jsonResponse(dto, status: .created)
     }
 
@@ -162,7 +169,9 @@ struct RecadoController: RouteCollection {
         var dtos: [RecadoDTO] = []
         dtos.reserveCapacity(items.count)
         for recado in items {
-            dtos.append(try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB, logger: req.logger))
+            dtos.append(try await Self.buildDTO(
+                recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+            ))
         }
 
         let nextCursor = hasMore ? items.last?.sequence : nil
@@ -174,7 +183,7 @@ struct RecadoController: RouteCollection {
 
     @Sendable
     func update(req: Request) async throws -> Response {
-        guard req.householdContext != nil else {
+        guard let context = req.householdContext else {
             throw Abort(.forbidden)
         }
         let user = try req.auth.require(User.self)
@@ -260,7 +269,9 @@ struct RecadoController: RouteCollection {
             isComment: false
         )
 
-        let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB, logger: req.logger)
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+        )
         return try Self.jsonResponse(dto, status: .ok)
     }
 
@@ -542,6 +553,81 @@ struct RecadoController: RouteCollection {
         return try Self.jsonResponse(dto, status: .created)
     }
 
+    // MARK: PUT /api/v1/recados/:recadoID/pin
+
+    /// D-14: fixa o recado no topo do mural — autor OU admin, decidido por
+    /// `authorOrAdminGuard`. A rota não decodifica corpo nenhum: não há nada que o cliente
+    /// possa mandar que altere a decisão.
+    @Sendable
+    func pin(req: Request) async throws -> Response {
+        guard let context = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        // Recado arquivado cai aqui como 404 (filtro padrão de `loadRecadoOrNotFound`) —
+        // um recado fora do mural não pode ser fixado.
+        let recado = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
+
+        if let forbidden = try Self.authorOrAdminGuard(recado: recado, userID: userID, role: context.role) {
+            return forbidden
+        }
+
+        // Idempotência que preserva a ordem do bloco: fixar de novo NÃO sobrescreve o
+        // instante original — uma retentativa de rede nunca reordena o bloco de fixados.
+        if recado.pinnedAt == nil {
+            recado.pinnedAt = Date()
+            try await recado.save(on: req.scopedDB)
+        }
+
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+        )
+        return try Self.jsonResponse(dto, status: .ok)
+    }
+
+    // MARK: DELETE /api/v1/recados/:recadoID/pin
+
+    /// D-14: desafixa o recado — mesma matriz autor-ou-admin de `pin`. Idempotente quando a
+    /// fixação já está ausente (200 igual). Sem corpo, mesmo motivo de `pin`.
+    @Sendable
+    func unpin(req: Request) async throws -> Response {
+        guard let context = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        let recado = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
+
+        if let forbidden = try Self.authorOrAdminGuard(recado: recado, userID: userID, role: context.role) {
+            return forbidden
+        }
+
+        recado.pinnedAt = nil
+        try await recado.save(on: req.scopedDB)
+
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+        )
+        return try Self.jsonResponse(dto, status: .ok)
+    }
+
     // MARK: Mapeamento Recado → RecadoDTO
 
     /// Preenche todos os campos consultando de verdade `recado_photos`, `recado_mentions`,
@@ -549,9 +635,15 @@ struct RecadoController: RouteCollection {
     /// comentários mais recentes). Enquanto nenhuma rota escrever nessas quatro tabelas,
     /// essas consultas devolvem coleção vazia e contagem zero — o estado verdadeiro do
     /// banco nesta fase, não um valor fixo no código.
+    ///
+    /// `viewerRole` (plano 02-11) é a ÚNICA fonte dos três sinais de permissão
+    /// (`canPin`/`canArchive`/`canUnarchive`), calculados aqui no mesmo ponto que `isMine` —
+    /// derivá-los no cliente reintroduziria a regra de autorização no front-end, contra a
+    /// diretriz de zero-trust do `.claude/CLAUDE.md`.
     private static func buildDTO(
         recado: Recado,
         requesterID: UUID,
+        viewerRole: MemberRole,
         on database: any Database,
         logger: Logger
     ) async throws -> RecadoDTO {
@@ -598,11 +690,14 @@ struct RecadoController: RouteCollection {
             latestComments.append(try await Self.buildCommentDTO(comment: comment, requesterID: requesterID, on: database))
         }
 
+        let isMine = recado.$author.id == requesterID
+        let isAdmin = viewerRole == .admin
+
         return RecadoDTO(
             id: recadoID,
             authorID: recado.$author.id,
             authorDisplayName: author.displayName,
-            isMine: recado.$author.id == requesterID,
+            isMine: isMine,
             text: recado.text,
             sequence: recado.sequence,
             createdAt: recado.createdAt ?? Date(),
@@ -612,7 +707,12 @@ struct RecadoController: RouteCollection {
             reactions: reactionSummary.reactions,
             myReaction: reactionSummary.myReaction,
             commentCount: commentCount,
-            latestComments: latestComments
+            latestComments: latestComments,
+            pinnedAt: recado.pinnedAt,
+            archivedAt: recado.archivedAt,
+            canPin: isMine || isAdmin,
+            canArchive: isMine || isAdmin,
+            canUnarchive: isAdmin
         )
     }
 
@@ -702,14 +802,45 @@ struct RecadoController: RouteCollection {
     /// existência de uma linha alheia). Extraído de `update`/`destroy` (plano 02-01) para as
     /// rotas de reação e comentário deste plano compartilharem exatamente o mesmo
     /// comportamento.
-    private static func loadRecadoOrNotFound(_ recadoID: UUID, on db: any Database) async throws -> Recado {
-        guard let recado = try await Recado.query(on: db)
+    ///
+    /// `includeArchived` com padrão `false` (D-15, plano 02-11): este é o ponto ÚNICO que
+    /// torna um recado arquivado invisível — 404 para TODO papel, inclusive admin (um 404
+    /// que dependesse do papel seria, ele próprio, um oráculo de existência da linha). O
+    /// padrão falso é deliberado: toda rota existente herda a invisibilidade sem ser editada
+    /// uma por uma, e só a rota de desarquivar passa `includeArchived: true`.
+    private static func loadRecadoOrNotFound(
+        _ recadoID: UUID,
+        on db: any Database,
+        includeArchived: Bool = false
+    ) async throws -> Recado {
+        var query = Recado.query(on: db)
             .filter(\.$id == recadoID)
-            .first()
-        else {
+        if !includeArchived {
+            query = query.filter(\.$archivedAt == nil)
+        }
+        guard let recado = try await query.first() else {
             throw Abort(.notFound)
         }
         return recado
+    }
+
+    // MARK: Fixar/arquivar — autorização autor-ou-admin (D-14/D-15, plano 02-11)
+
+    /// Devolve `nil` quando o requisitante é o autor OU tem papel de admin; caso contrário,
+    /// a resposta 403. Reusa `APIErrorCode.forbidden` (não `.notAuthor`, que diria "só o
+    /// autor" — falso aqui: a regra de D-14/D-15 é autor-ou-admin) com a mesma mensagem do
+    /// `RequireRoleMiddleware`. O papel vem de `req.householdContext`, lido da linha real de
+    /// `household_members` dentro da transação da request — nunca de claim do token, nunca
+    /// de cabeçalho, nunca de campo do corpo.
+    private static func authorOrAdminGuard(recado: Recado, userID: UUID, role: MemberRole) throws -> Response? {
+        if recado.$author.id == userID || role == .admin {
+            return nil
+        }
+        return try Self.errorResponse(
+            code: .forbidden,
+            message: "Você não tem permissão para esta ação.",
+            status: .forbidden
+        )
     }
 
     // MARK: Menções (plano 02-02, D-05/D-06)
