@@ -523,6 +523,21 @@ struct RecadoController: RouteCollection {
             try await mention.save(on: req.scopedDB)
         }
 
+        // D-09: marcar dentro de um comentário dispara push pelo mesmo mecanismo do recado —
+        // `isComment: true` faz `enqueueMentionPushes` montar o corpo com
+        // `MuralPushCopy.commentMentionBody` em vez de `recadoMentionBody`. Nenhum segundo
+        // mecanismo de notificação: mesmo `MentionPushDispatchMiddleware`/`PushService` do
+        // plano 02-02, só um novo chamador.
+        try await Self.enqueueMentionPushes(
+            for: req,
+            recipients: mentionedUserIDs,
+            authorID: userID,
+            authorName: user.displayName ?? "Alguém",
+            text: trimmedText,
+            hasPhotos: false,
+            isComment: true
+        )
+
         let dto = try await Self.buildCommentDTO(comment: comment, requesterID: userID, on: req.scopedDB)
         return try Self.jsonResponse(dto, status: .created)
     }
