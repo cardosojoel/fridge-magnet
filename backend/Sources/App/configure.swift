@@ -218,6 +218,7 @@ func configure(_ app: Application) async throws {
     try app.register(collection: HouseholdController())
     try app.register(collection: DeviceController())
     try app.register(collection: RecadoController())
+    try app.register(collection: RecadoPhotoController())
     // `POST /api/v1/dev/push-test` só existe em desenvolvimento — ausência de rota, não
     // checagem em runtime (T-11-04, ver `DeviceController.registerDevRoutes`).
     if app.environment == .development {

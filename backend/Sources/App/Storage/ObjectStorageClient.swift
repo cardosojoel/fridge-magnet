@@ -17,6 +17,20 @@ protocol ObjectStorageClient: Sendable {
     func presignedGetURL(key: String, expiresIn: TimeInterval) async throws -> URL
     func objectExists(key: String) async throws -> Bool
     func deleteObjects(keys: [String]) async throws
+    /// Metadados reais do objeto (`Content-Type`, `Content-Length`) tais como o armazenamento
+    /// os reporta — `nil` quando o objeto não existe (mesmo critério de `objectExists`).
+    /// Adição aditiva ao protocolo original do plano 02-01 (plano 02-04 Task 4, deviation
+    /// Rule 2): sem isto o `confirm` não teria como gravar `content_type`/`byte_size`
+    /// relidos do armazenamento em vez de aceitos do corpo do request (T-02-36) — a
+    /// `ConfirmPhotoUploadRequest` nem carrega esses campos, então "reler do armazenamento" é
+    /// a única fonte possível.
+    func objectMetadata(key: String) async throws -> ObjectMetadata?
+}
+
+/// Metadados de um objeto já enviado ao bucket — ver doc de `ObjectStorageClient.objectMetadata`.
+struct ObjectMetadata: Sendable {
+    var contentType: String
+    var byteSize: Int64
 }
 
 /// Erro lançado pelos dois métodos de URL de `NoopObjectStorageClient` — sinaliza "ainda não
@@ -43,6 +57,10 @@ struct NoopObjectStorageClient: ObjectStorageClient {
     }
 
     func deleteObjects(keys: [String]) async throws {}
+
+    func objectMetadata(key: String) async throws -> ObjectMetadata? {
+        nil
+    }
 }
 
 /// Implementação real de `ObjectStorageClient` sobre `SotoS3` (Cloudflare R2, API S3
@@ -110,6 +128,24 @@ struct SotoS3ObjectStorageClient: ObjectStorageClient {
         guard !keys.isEmpty else { return }
         let objects = keys.map { S3.ObjectIdentifier(key: $0) }
         _ = try await s3.deleteObjects(bucket: bucketName, delete: S3.Delete(objects: objects))
+    }
+
+    /// Mesmo `HEAD` de `objectExists`, mas devolvendo `Content-Type`/`Content-Length` reais em
+    /// vez de descartá-los — usado pelo `confirm` para nunca aceitar esses dois campos do
+    /// corpo do request (T-02-36).
+    func objectMetadata(key: String) async throws -> ObjectMetadata? {
+        do {
+            let output = try await s3.headObject(bucket: bucketName, key: key)
+            return ObjectMetadata(
+                contentType: output.contentType ?? "application/octet-stream",
+                byteSize: output.contentLength ?? 0
+            )
+        } catch let error as S3ErrorType
+        where error.errorCode == S3ErrorType.notFound.errorCode || error.errorCode == S3ErrorType.noSuchKey.errorCode {
+            return nil
+        } catch let error as AWSRawError where error.context.responseCode == .notFound {
+            return nil
+        }
     }
 
     // MARK: Chave → URL do objeto
