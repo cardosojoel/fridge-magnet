@@ -49,6 +49,11 @@ targets:
         UILaunchScreen: {}
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+        # Plano 01-12 (D-15): sem este background mode o SO nunca entrega push remoto ao
+        # app, mesmo com o entitlement aps-environment configurado — as duas coisas são
+        # exigidas juntas, uma no Info.plist e outra no entitlements, nas duas plataformas.
+        UIBackgroundModes:
+          - remote-notification
         CFBundleURLTypes:
           - CFBundleURLName: com.jklar.app
             CFBundleURLSchemes:
@@ -92,6 +97,15 @@ targets:
         com.apple.security.network.client: true
         com.apple.developer.applesignin:
           - Default
+        # Plano 01-12 (D-15/D-16): registro remoto (`registerForRemoteNotifications()`)
+        # exige este entitlement nas duas plataformas — sem ele o SO nunca chega a chamar
+        # `didRegisterForRemoteNotificationsWithDeviceToken`. `development` cobre os builds
+        # de Debug locais desta fatia; a variante `production` (TestFlight/App Store) fica
+        # para a Fase 10 (hosting real, mesmo adiamento já documentado em
+        # `JKLarAPIBaseURL`/APIConfiguration.swift). O ambiente enviado ao backend em cada
+        # registro (`APNSEnvironment` em `DeviceRegistrationRequest`) é decidido em código
+        # por `#if DEBUG` (D-16 opção c), independente deste valor de assinatura.
+        aps-environment: development
         # O cache de tokens do MSAL precisa de um keychain-access-group explícito — sem
         # isto o fluxo compila mas falha só em tempo de execução no macOS (plano 01-08).
         keychain-access-groups:

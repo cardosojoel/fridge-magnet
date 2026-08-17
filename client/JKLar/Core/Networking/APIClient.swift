@@ -48,6 +48,7 @@ actor APIClient {
     private let baseURL: URL
     private var refreshTask: Task<TokenPair, Error>?
     private var onSessionExpired: (@Sendable () async -> Void)?
+    private var onSessionEstablished: (@Sendable () async -> Void)?
 
     init(transport: APIClientTransport = URLSessionTransport(), baseURL: URL = APIConfiguration.baseURL) {
         self.transport = transport
@@ -60,6 +61,15 @@ actor APIClient {
     /// networking → estado de app.
     func setSessionExpiredHandler(_ handler: @escaping @Sendable () async -> Void) {
         onSessionExpired = handler
+    }
+
+    /// `PushRegistrationService` registra aqui (plano 01-12, D-15) — chamado sempre que este
+    /// `APIClient` grava um novo par de tokens no Keychain, o que cobre exatamente os dois
+    /// momentos que D-15 exige reregistro: um novo login bem-sucedido (`createSession`) e
+    /// uma renovação de sessão bem-sucedida (`doRefresh`). Mesma direção de dependência do
+    /// `onSessionExpired` acima: `APIClient` nunca importa `PushRegistrationService`.
+    func setSessionEstablishedHandler(_ handler: @escaping @Sendable () async -> Void) {
+        onSessionEstablished = handler
     }
 
     // MARK: - Rotas
@@ -81,6 +91,7 @@ actor APIClient {
         }
         let session = try Self.decode(SessionResponse.self, from: data)
         KeychainTokenStore.save(TokenPair(accessToken: session.accessToken, refreshToken: session.refreshToken))
+        await onSessionEstablished?()
         return session
     }
 
@@ -199,6 +210,19 @@ actor APIClient {
         }
     }
 
+    /// `POST /api/v1/devices` (plano 01-11, exposto ao cliente aqui) — um dispositivo novo
+    /// devolve 201, um `apnsToken` já existente (upsert, ex.: reregistro de D-15) devolve
+    /// 200; os dois são sucesso para `PushRegistrationService`. `userId`/`householdId`
+    /// nunca fazem parte de `DeviceRegistrationRequest` — sempre resolvidos no servidor a
+    /// partir do JWT/contexto (IDENT-06, `.claude/CLAUDE.md`).
+    func registerDevice(_ request: DeviceRegistrationRequest) async throws {
+        let body = try Self.encoder.encode(request)
+        let (_, response) = try await send(path: "api/v1/devices", method: "POST", body: body, requiresAuth: true)
+        guard response.statusCode == 200 || response.statusCode == 201 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+    }
+
     /// `POST /api/v1/auth/logout` — D-11: o logout do servidor é o que vale. Sempre apaga o
     /// Keychain local, mesmo que a chamada de rede falhe (o dispositivo não deve continuar
     /// achando que está logado só porque a rede caiu no momento do logout).
@@ -276,6 +300,7 @@ actor APIClient {
         let session = try Self.decode(SessionResponse.self, from: data)
         let pair = TokenPair(accessToken: session.accessToken, refreshToken: session.refreshToken)
         KeychainTokenStore.save(pair)
+        await onSessionEstablished?()
         return pair
     }
 

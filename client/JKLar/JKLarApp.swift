@@ -1,5 +1,59 @@
 import SwiftUI
 
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
+
+/// Ponte entre o delegate de app do SO (única forma de receber
+/// `didRegisterForRemoteNotificationsWithDeviceToken`/
+/// `didFailToRegisterForRemoteNotificationsWithError`, plano 01-12, D-15) e
+/// `PushRegistrationService`. Dona da única instância de `PushRegistrationService`/
+/// `APIClient` do app inteiro — `JKLarApp`/`RootView` leem a mesma instância via
+/// `@UIApplicationDelegateAdaptor`/`@NSApplicationDelegateAdaptor` (`appDelegate.pushRegistrationService`),
+/// nunca criam uma segunda. Sem isto, `RootView` teria seu próprio `APIClient` desconectado
+/// e o hook de reregistro em login/renovação (`APIClient.setSessionEstablishedHandler`)
+/// nunca veria os logins de verdade.
+@MainActor
+final class AppDelegate: NSObject {
+    let pushRegistrationService = PushRegistrationService(apiClient: APIClient())
+}
+
+#if os(iOS)
+extension AppDelegate: UIApplicationDelegate {
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        Task { await pushRegistrationService.resumePendingRegistrationIfNeeded() }
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { await pushRegistrationService.registerDeviceToken(deviceToken) }
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        pushRegistrationService.didFailToRegister(error: error)
+    }
+}
+#elseif os(macOS)
+extension AppDelegate: NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { await pushRegistrationService.resumePendingRegistrationIfNeeded() }
+    }
+
+    func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Task { await pushRegistrationService.registerDeviceToken(deviceToken) }
+    }
+
+    func application(_ application: NSApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        pushRegistrationService.didFailToRegister(error: error)
+    }
+}
+#endif
+
 /// Estado do link `jklar://join/<CODE>` (plano 01-09, D-02/D-05) — guardado enquanto o
 /// login acontece, para nunca furar a exigência de sessão nem o gate de casa: o código só
 /// chega a `OnboardingView` depois que `RootView` chega em `.needsHousehold` de verdade,
@@ -45,9 +99,19 @@ final class DeepLinkRouter {
 struct JKLarApp: App {
     @State private var deepLinkRouter = DeepLinkRouter()
 
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #elseif os(macOS)
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #endif
+
     var body: some Scene {
         WindowGroup {
-            RootView()
+            // `pushRegistrationService` passado explicitamente (plano 01-12, Task 2) — é o
+            // que faz `RootView` construir `SessionStore` sobre o mesmo `APIClient` desta
+            // instância, para o hook de D-15 (login/renovação disparando reregistro)
+            // observar a sessão de verdade em vez de um `APIClient` desconectado.
+            RootView(pushRegistrationService: appDelegate.pushRegistrationService)
                 .environment(deepLinkRouter)
                 .onOpenURL { url in
                     deepLinkRouter.handle(url: url)
