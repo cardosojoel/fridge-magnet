@@ -60,9 +60,21 @@ struct MuralFeedView: View {
         .overlay(alignment: .bottomTrailing) {
             composeFAB
         }
+        // Apresentação do compose por plataforma (D-13, plano 02-13): tela cheia no iOS; no
+        // macOS, onde a apresentação em tela cheia não existe no framework, a mesma view é
+        // apresentada como folha grande — as dimensões mínimas moram dentro de
+        // `ComposeRecadoView` (quem apresenta escolhe como apresentar; a tela sabe de quanto
+        // espaço precisa). O conteúdo é literalmente o mesmo nos dois ramos — a montagem por
+        // modo (novo/edição) não é duplicada.
+        #if os(iOS)
+        .fullScreenCover(isPresented: $isComposePresented) {
+            composeSheet
+        }
+        #elseif os(macOS)
         .sheet(isPresented: $isComposePresented) {
             composeSheet
         }
+        #endif
         .sheet(item: $selectedRecado, onDismiss: {
             Task { await viewModel.reloadFromTop() }
         }) { recado in

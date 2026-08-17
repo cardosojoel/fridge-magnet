@@ -13,15 +13,18 @@ import UIKit
 import AppKit
 #endif
 
-/// Folha de compose no caminho de texto + fotos + menção — apresentada por `MuralFeedView` a
-/// partir do FAB (modo novo) ou do item "Editar" do menu de overflow de `RecadoCard` (modo
-/// edição).
+/// Tela cheia de compose estilo Instagram (D-13, plano 02-13) — apresentada por
+/// `MuralFeedView` a partir do FAB (modo novo) ou do item "Editar" do menu de overflow de
+/// `RecadoCard` (modo edição): `fullScreenCover` no iOS, folha grande de dimensões mínimas
+/// declaradas no macOS (onde `fullScreenCover` não existe no framework).
 ///
-/// `.thickMaterial` + `JKLayout.sheetShape`, mesmo precedente visual de `InviteSheet` (Fase
-/// 1). Plano 02-06 Task 2 preenche os dois pontos de extensão que o plano 02-05 deixou
-/// marcados: botão de adicionar fotos (`PhotosPicker`, framework `PhotosUI` nativo — **não**
-/// exige `NSPhotoLibraryUsageDescription` porque o seletor roda fora do processo do app) com
-/// contador/teto/estado por miniatura, e o gatilho do seletor de menção com a linha de chips.
+/// Fundo de tela do app (o mesmo modificador de vidro translúcido do feed), nunca material
+/// de folha — a Supersessão item 1 do Addendum 2 do `02-UI-SPEC.md` aposentou o material
+/// espesso + arredondamento de folha da versão compacta. A tela inteira rola como uma coisa
+/// só; as folhas aninhadas (seletor de
+/// menção) mantêm o material de folha que já tinham. Seleção de fotos via `PhotosPicker`
+/// (framework `PhotosUI` nativo — **não** exige `NSPhotoLibraryUsageDescription` porque o
+/// seletor roda fora do processo do app), com contador/teto/estado por foto (plano 02-06).
 struct ComposeRecadoView: View {
     @State private var viewModel: ComposeRecadoViewModel
     @State private var photoPickerSelection: [PhotosPickerItem] = []
@@ -47,43 +50,112 @@ struct ComposeRecadoView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: JKSpacing.lg) {
-            Text(title)
-                .font(JKTypography.heading)
+        VStack(spacing: 0) {
+            topBar
 
-            // `axis: .vertical` + `lineLimit(1...10)`: o campo cresce com o texto e passa a
-            // rolar internamente depois de ~10 linhas visíveis, para a folha não crescer sem
-            // limite (02-UI-SPEC.md § Copywriting Contract, "Compose text field placeholder").
-            TextField(JKCopy.muralComposeTextPlaceholder, text: $viewModel.text, axis: .vertical)
-                .font(JKTypography.body)
-                .lineLimit(1...10)
-                .disabled(viewModel.isSubmitting)
+            // A tela inteira rola como uma coisa só — nenhum elemento interno tem rolagem
+            // própria (02-UI-SPEC.md § Addendum 2, Supersessão item 3). Enquanto o envio está
+            // em voo, o formulário inteiro desabilita; o sinal de progresso mora na posição de
+            // enviar da barra superior.
+            ScrollView {
+                VStack(alignment: .leading, spacing: JKSpacing.lg) {
+                    photoSection
 
-            photoSection
+                    // Sem nenhum modificador de limite de linhas — nem mínimo, nem máximo: o
+                    // campo cresce com o texto e quem rola é a tela (D-13; a remoção do antigo
+                    // teto de ~10 linhas é a Supersessão item 3, a causa literal do "muito
+                    // travada" do dogfooding).
+                    TextField(JKCopy.muralComposeTextPlaceholder, text: $viewModel.text, axis: .vertical)
+                        .font(JKTypography.body)
 
-            mentionSection
+                    optionRows
 
-            if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage)
-                    .font(JKTypography.label)
-                    .foregroundStyle(JKColor.jkDestructive)
-            }
-
-            submitButton
-
-            Button(JKCopy.cancelButtonLabel) {
-                dismiss()
+                    if let errorMessage = viewModel.errorMessage {
+                        Text(errorMessage)
+                            .font(JKTypography.label)
+                            .foregroundStyle(JKColor.jkDestructive)
+                    }
+                }
+                .padding(JKSpacing.lg)
             }
             .disabled(viewModel.isSubmitting)
-            .frame(maxWidth: .infinity)
         }
-        .padding(JKSpacing.lg)
-        .background(.thickMaterial)
-        .presentationCornerRadius(JKLayout.sheetCornerRadius)
+        .jkGlassBackground()
+        #if os(macOS)
+        // A tela é quem sabe de quanto espaço precisa (plano 02-13 <planner_assumptions>
+        // item 1): as dimensões mínimas da folha grande de macOS vêm dos tokens do contrato
+        // (02-UI-SPEC.md § Addendum 2, D-13 "Presentation").
+        .frame(
+            minWidth: JKLayout.composeSheetMinWidth,
+            minHeight: JKLayout.composeSheetMinHeight
+        )
+        #endif
         .sheet(isPresented: $isMentionPickerPresented) {
+            // Folha aninhada mantém o material e o arredondamento de folha que já tem — a
+            // supersessão de apresentação vale para o compose, não para as folhas que nascem
+            // dele (02-UI-SPEC.md § Addendum 2, Supersessão item 1).
             MentionPickerView(initiallySelected: viewModel.selectedMentions.map(\.userID)) { mentions in
                 viewModel.setMentions(mentions)
             }
+        }
+    }
+
+    // MARK: - Barra superior (D-13)
+
+    /// Três posições (02-UI-SPEC.md § Addendum 2, D-13 "Top bar"): cancelar à esquerda em
+    /// texto simples sem cor de destaque — continua fechando na hora, sem diálogo de descarte
+    /// (backstop consciente do contrato: a tela cheia do iOS já remove o fechamento por
+    /// gesto, então o risco de perda acidental é menor, não maior); título no centro no papel
+    /// de cabeçalho; enviar à direita em texto na cor de destaque (o mesmo uso reservado de
+    /// destaque de antes, relocado da folha para a barra — não um uso novo).
+    private var topBar: some View {
+        ZStack {
+            Text(title)
+                .font(JKTypography.heading)
+
+            HStack {
+                Button(JKCopy.cancelButtonLabel) {
+                    dismiss()
+                }
+                .buttonStyle(.plain)
+                .font(JKTypography.body)
+                .disabled(viewModel.isSubmitting)
+
+                Spacer()
+
+                submitButton
+            }
+        }
+        .padding(JKSpacing.md)
+    }
+
+    /// A regra de habilitação é **exatamente** `viewModel.canSubmit`, sem nenhuma condição
+    /// extra escrita aqui (T-02-77). Enquanto o envio está em voo, esta posição vira um
+    /// indicador de progresso inline. A tela só se fecha sozinha quando `submit()` não deixou
+    /// nenhum `errorMessage` — uma falha parcial de envio de foto mantém a tela aberta, com
+    /// as fotos falhadas e sua retentativa visíveis (D-01), mesmo comportamento da versão em
+    /// folha.
+    @ViewBuilder
+    private var submitButton: some View {
+        if viewModel.isSubmitting {
+            ProgressView()
+        } else {
+            Button {
+                Task {
+                    await viewModel.submit { recado in
+                        onSuccess(recado)
+                    }
+                    if viewModel.errorMessage == nil {
+                        dismiss()
+                    }
+                }
+            } label: {
+                Text(ctaLabel)
+                    .font(JKTypography.body.weight(.semibold))
+            }
+            .buttonStyle(.borderless)
+            .tint(JKColor.jkAccent)
+            .disabled(!viewModel.canSubmit)
         }
     }
 
@@ -95,14 +167,13 @@ struct ComposeRecadoView: View {
                 addPhotosButton
                     .padding(.vertical, JKSpacing.xl)
             } else {
-                ScrollView(.horizontal) {
-                    HStack(spacing: JKSpacing.sm) {
-                        ForEach(viewModel.stagedPhotos) { photo in
-                            stagedPhotoThumbnail(photo)
-                        }
+                // Sem rolagem interna (Supersessão item 3) — a Task 2 do plano 02-13 troca
+                // esta tira de miniaturas pelo carrossel quadrado de largura inteira.
+                HStack(spacing: JKSpacing.sm) {
+                    ForEach(viewModel.stagedPhotos) { photo in
+                        stagedPhotoThumbnail(photo)
                     }
                 }
-                .scrollIndicators(.hidden)
 
                 HStack(spacing: JKSpacing.sm) {
                     addPhotosButton
@@ -235,6 +306,16 @@ struct ComposeRecadoView: View {
         }
     }
 
+    // MARK: - Linhas de opção (D-13, corpo item 3)
+
+    /// Cada opção do compose é uma linha própria de largura inteira abaixo da legenda, com
+    /// `JKSpacing.md` entre elas (02-UI-SPEC.md § Addendum 2, D-13 corpo item 3).
+    private var optionRows: some View {
+        VStack(alignment: .leading, spacing: JKSpacing.md) {
+            mentionSection
+        }
+    }
+
     // MARK: - Menção (plano 02-06 Task 2)
 
     @ViewBuilder
@@ -248,28 +329,6 @@ struct ComposeRecadoView: View {
         if !viewModel.selectedMentions.isEmpty {
             JKMentionChipRow(mentions: viewModel.selectedMentions)
         }
-    }
-
-    private var submitButton: some View {
-        Button {
-            Task {
-                await viewModel.submit { recado in
-                    onSuccess(recado)
-                }
-                if viewModel.errorMessage == nil {
-                    dismiss()
-                }
-            }
-        } label: {
-            if viewModel.isSubmitting {
-                ProgressView()
-                    .frame(maxWidth: .infinity, minHeight: JKLayout.minTapTarget)
-            } else {
-                Text(ctaLabel)
-            }
-        }
-        .buttonStyle(.jkPrimary)
-        .disabled(!viewModel.canSubmit)
     }
 
     private var title: String {

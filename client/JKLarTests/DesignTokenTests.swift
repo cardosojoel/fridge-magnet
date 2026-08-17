@@ -22,4 +22,13 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(JKLayout.controlCornerRadius, 12)
         XCTAssertEqual(JKLayout.sheetCornerRadius, 28)
     }
+
+    /// Dimensões de componente do compose em tela cheia (02-UI-SPEC.md § Addendum 2, D-13) —
+    /// travadas por teste para ninguém "arredondar" um dos três valores depois sem passar
+    /// pelo contrato visual (plano 02-13 Task 1).
+    func testComposeFullScreenDimensionsMatchUISpec() {
+        XCTAssertEqual(JKLayout.composeSheetMinWidth, 560)
+        XCTAssertEqual(JKLayout.composeSheetMinHeight, 640)
+        XCTAssertEqual(JKLayout.composePhotoInviteMinHeight, 200)
+    }
 }

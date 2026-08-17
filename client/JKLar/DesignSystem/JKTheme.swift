@@ -27,6 +27,21 @@ enum JKLayout {
     /// edição); tamanho adotado por conveniência de leiaute até uma fase futura de
     /// design revisar, mesmo raciocínio já documentado para `JKCopy.appName`.
     static let stagedPhotoThumbnailSize: CGFloat = 96
+    /// Largura mínima da folha grande de compose no macOS (02-UI-SPEC.md § Addendum 2, D-13
+    /// "Presentation": "macOS ... large `sheet` with a declared minimum content size of
+    /// **560×640pt**") — dimensão de componente declarada, mesma categoria de exceção dos
+    /// 44pt/56pt/96pt acima, não um valor da escala de espaçamento.
+    static let composeSheetMinWidth: CGFloat = 560
+    /// Altura mínima da folha grande de compose no macOS — mesma linha do contrato acima
+    /// (02-UI-SPEC.md § Addendum 2, D-13 "Presentation", 560×640pt); dimensão de componente
+    /// declarada, não valor da escala de espaçamento.
+    static let composeSheetMinHeight: CGFloat = 640
+    /// Altura mínima do convite de foto do compose sem nenhuma foto anexada (02-UI-SPEC.md §
+    /// Addendum 2, D-13 corpo item 1: "minimum height **200pt** (component dimension)") —
+    /// dimensão de componente declarada, não valor da escala de espaçamento. Consumido pela
+    /// Task 2 do plano 02-13; declarado junto dos irmãos para o arquivo de tokens ser tocado
+    /// uma vez só.
+    static let composePhotoInviteMinHeight: CGFloat = 200
     static let cardCornerRadius: CGFloat = 16
     static let controlCornerRadius: CGFloat = 12
     static let sheetCornerRadius: CGFloat = 28
