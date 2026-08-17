@@ -365,7 +365,16 @@ actor APIClient {
         body: Data?,
         accessToken: String?
     ) -> URLRequest {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        // `URL.appendingPathComponent(_:)` trata `path` como um único segmento opaco e
+        // percent-encoda `?`/`=`/`&` — quebra silenciosamente qualquer rota com query string
+        // (ex.: `feed(cursor:)`, plano 02-05, primeira chamada deste arquivo a montar uma).
+        // `URL(string:relativeTo:)` resolve `path` como referência de URI de verdade
+        // (RFC 3986), preservando a query string; `.absoluteURL` funde com `baseURL` porque
+        // `URLRequest` precisa de uma URL absoluta, não relativa.
+        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
+            fatalError("APIClient: path inválido para montar request: \(path)")
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         if let body {
             request.httpBody = body
