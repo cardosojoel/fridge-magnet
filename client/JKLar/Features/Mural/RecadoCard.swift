@@ -1,26 +1,33 @@
 import JKLarShared
 import SwiftUI
 
+/// `PhotoDownloadDTO` já carrega `id: UUID` (a própria foto) — conformidade aditiva, só do
+/// lado do cliente, para o carrossel de foto do design system consumir a lista de URLs
+/// diretamente, sem um tipo de wrapper. Nenhum campo novo, nenhuma mudança de comportamento.
+extension PhotoDownloadDTO: Identifiable {}
+
 /// Um recado do feed, envolto em `JKCard` (01-UI-SPEC.md § Native Materials).
 ///
-/// Nesta fatia (plano 02-05, caminho de texto) renderiza: nome do autor + horário relativo,
-/// texto com truncagem em ~5 linhas e "ver mais" inline, e o menu de overflow `ellipsis`
-/// (Editar/Apagar) mostrado **somente** quando `recado.isMine` — sinal já calculado pelo
-/// servidor (D-03), o cliente nunca decide isso comparando nome/posição. O diálogo de
-/// confirmação de apagar mora aqui (não no chamador): `onDelete` só é invocado depois que a
-/// pessoa confirma no diálogo destrutivo.
+/// Nesta fatia (planos 02-05/02-06) renderiza: nome do autor + horário relativo, carrossel de
+/// fotos (quando há foto), texto com truncagem em ~5 linhas e "ver mais" inline, chips de
+/// menção (quando há menção), e o menu de overflow `ellipsis` (Editar/Apagar) mostrado
+/// **somente** quando `recado.isMine` — sinal já calculado pelo servidor (D-03), o cliente
+/// nunca decide isso comparando nome/posição. O diálogo de confirmação de apagar mora aqui
+/// (não no chamador): `onDelete` só é invocado depois que a pessoa confirma no diálogo
+/// destrutivo.
 ///
 /// Pontos de extensão nomeados, na ordem do `02-UI-SPEC.md` § Native Materials ("carrossel,
-/// texto, chips de menção, barra de reação, prévia dos 2 últimos comentários") — nenhum
-/// deles é renderizado por este plano:
-/// - Carrossel de fotos (plano 02-04/02-06): entraria acima do texto, edge-to-edge dentro do
-///   `JKCard`.
-/// - Chips de menção (plano 02-06): entrariam abaixo do texto.
+/// texto, chips de menção, barra de reação, prévia dos 2 últimos comentários") — os dois
+/// últimos continuam marcados, pertencem ao plano 02-07, no mesmo arquivo:
 /// - Barra de reação (plano 02-07): entraria abaixo dos chips de menção.
 /// - Prévia dos 2 últimos comentários + link "Ver todos os {n} comentários" (plano 02-07):
 ///   entraria abaixo da barra de reação.
 struct RecadoCard: View {
     let recado: RecadoDTO
+    /// URLs de leitura das fotos deste recado — passadas pela view pai
+    /// (`MuralFeedViewModel.photoURLs(for:)`, plano 02-06 Task 3), porque `RecadoCard` não
+    /// tem acesso direto ao view model do feed.
+    var photoURLs: [PhotoDownloadDTO] = []
     var onEdit: (RecadoDTO) -> Void
     var onDelete: (RecadoDTO) -> Void
 
@@ -32,12 +39,18 @@ struct RecadoCard: View {
             VStack(alignment: .leading, spacing: JKSpacing.sm) {
                 header
 
+                if !recado.photos.isEmpty {
+                    photoCarousel
+                }
+
                 if let text = recado.text, !text.isEmpty {
                     recadoText(text)
                 }
 
-                // MARK: - Ponto de extensão: carrossel de fotos (plano 02-04/02-06)
-                // MARK: - Ponto de extensão: chips de menção (plano 02-06)
+                if !recado.mentions.isEmpty {
+                    JKMentionChipRow(mentions: recado.mentions)
+                }
+
                 // MARK: - Ponto de extensão: barra de reação (plano 02-07)
                 // MARK: - Ponto de extensão: prévia dos 2 últimos comentários (plano 02-07)
             }
@@ -54,6 +67,42 @@ struct RecadoCard: View {
         } message: {
             Text(JKCopy.muralRecadoDeleteConfirmMessage)
         }
+    }
+
+    /// Carrossel de foto, borda a borda dentro do `JKCard` — cantos superiores herdam o raio
+    /// de `JKLayout.cardShape`, inferiores retos onde o texto continua abaixo (02-UI-SPEC.md
+    /// § Native Materials). Compensa o `padding(JKSpacing.md)` interno do `JKCard` com padding
+    /// negativo nos três lados que tocam a borda superior/laterais, para a imagem chegar até
+    /// a borda do cartão. `AsyncImage` com `jkShimmerPlaceholder` enquanto carrega — uma
+    /// única foto não mostra pontos de página (o carrossel só desenha o indicador com 2+
+    /// itens).
+    private var photoCarousel: some View {
+        JKPhotoCarousel(items: photoURLs) { photo in
+            AsyncImage(url: photo.downloadURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                case .empty:
+                    Color.clear.jkShimmerPlaceholder(isActive: true)
+                case .failure:
+                    Color.clear
+                @unknown default:
+                    Color.clear
+                }
+            }
+            .clipped()
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(
+            .rect(
+                topLeadingRadius: JKLayout.cardCornerRadius,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: JKLayout.cardCornerRadius
+            )
+        )
+        .padding(.top, -JKSpacing.md)
+        .padding(.horizontal, -JKSpacing.md)
     }
 
     private var header: some View {

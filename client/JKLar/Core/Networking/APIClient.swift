@@ -277,6 +277,51 @@ actor APIClient {
         }
     }
 
+    /// `POST /api/v1/recados/:recadoID/photos/presign` (plano 02-06, consumindo
+    /// `RecadoPhotoController.presign` do plano 02-04) — um slot por foto anexada ainda não
+    /// enviada; o servidor reforça o teto de 10 fotos de forma independente do cliente
+    /// (D-02). Modos de falha tipados esperados: `.photoLimitExceeded`, `.notAuthor`.
+    func presignPhotoUploads(recadoID: UUID, slots: [PhotoUploadSlotRequest]) async throws -> PresignPhotoUploadResponse {
+        let body = try Self.encoder.encode(PresignPhotoUploadRequest(slots: slots))
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(recadoID.uuidString)/photos/presign", method: "POST", body: body, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(PresignPhotoUploadResponse.self, from: data)
+    }
+
+    /// `POST /api/v1/recados/:recadoID/photos/confirm` (plano 02-06, `RecadoPhotoController.confirm`
+    /// do plano 02-04) — só as chaves que o cliente diz terem chegado ao armazenamento; o
+    /// servidor revalida cada uma (`HEAD`) antes de gravar qualquer linha (02-RESEARCH.md
+    /// Pitfall 3). Modo de falha tipado esperado: `.photoNotUploaded` (409).
+    func confirmPhotoUploads(recadoID: UUID, objectKeys: [String]) async throws -> [ConfirmedPhotoDTO] {
+        let body = try Self.encoder.encode(ConfirmPhotoUploadRequest(objectKeys: objectKeys))
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(recadoID.uuidString)/photos/confirm", method: "POST", body: body, requiresAuth: true
+        )
+        guard response.statusCode == 201 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode([ConfirmedPhotoDTO].self, from: data)
+    }
+
+    /// `POST /api/v1/recados/photos/urls` (plano 02-06, `RecadoPhotoController.downloadURLs`
+    /// do plano 02-04) — URLs de leitura em lote por página de feed; um recado de outra casa
+    /// simplesmente não aparece na resposta (RLS), nunca um erro. Sem ramo de erro tipado com
+    /// significado para a interface, por isso `.http(status:)` cru, mesmo padrão de `feed(cursor:)`.
+    func photoDownloadURLs(recadoIDs: [UUID]) async throws -> PhotoDownloadURLsResponse {
+        let body = try Self.encoder.encode(PhotoDownloadURLsRequest(recadoIDs: recadoIDs))
+        let (data, response) = try await send(
+            path: "api/v1/recados/photos/urls", method: "POST", body: body, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+        return try Self.decode(PhotoDownloadURLsResponse.self, from: data)
+    }
+
     /// `POST /api/v1/auth/logout` — D-11: o logout do servidor é o que vale. Sempre apaga o
     /// Keychain local, mesmo que a chamada de rede falhe (o dispositivo não deve continuar
     /// achando que está logado só porque a rede caiu no momento do logout).

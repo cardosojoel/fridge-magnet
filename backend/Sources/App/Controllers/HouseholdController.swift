@@ -318,6 +318,10 @@ struct HouseholdController: RouteCollection {
         let dtos = try memberships.map { membership -> MemberDTO in
             MemberDTO(
                 id: try membership.requireID(),
+                // Plano 02-06: distinto de `id` acima (linha de `household_members`) — este é
+                // o `user.id` real que o seletor de menção estruturado precisa enviar em
+                // `mentionedUserIDs` (D-06).
+                userID: membership.$user.id,
                 displayName: membership.user.displayName,
                 role: MemberRole(rawValue: membership.role) ?? .adulto,
                 joinedAt: membership.createdAt ?? Date(),
@@ -392,6 +396,7 @@ struct HouseholdController: RouteCollection {
 
         let dto = MemberDTO(
             id: try member.requireID(),
+            userID: member.$user.id,
             displayName: member.user.displayName,
             role: body.role,
             joinedAt: member.createdAt ?? Date(),

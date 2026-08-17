@@ -1,3 +1,4 @@
+import JKLarShared
 import SwiftUI
 
 /// Fundo de tela translúcido — `.ultraThinMaterial` sobre `jkScreenBackgroundBase`
@@ -92,6 +93,141 @@ struct JKRoleBadge: View {
             .padding(.horizontal, JKSpacing.sm)
             .padding(.vertical, JKSpacing.xs)
             .background(JKColor.jkCardSurfaceBase, in: Capsule())
+    }
+}
+
+/// Carrossel paginado de até 10 fotos (D-02, plano 02-06) — usado tanto pelo compose
+/// (miniaturas locais recém-anexadas) quanto pelo cartão do feed (fotos remotas). Recebe dado
+/// tipado (`Item: Identifiable`) e uma view por item — nenhuma lógica de tela mora aqui, mesmo
+/// molde de `JKCard`. `ScrollView`/`scrollTargetBehavior(.paging)` em vez de
+/// `TabView(.page)` porque o estilo de página nativo do `TabView` não existe no macOS — este
+/// componente precisa funcionar nas duas plataformas com o mesmo código.
+///
+/// O indicador de pontos só aparece com 2+ itens (com 1 item, imagem única de borda a borda,
+/// sem nenhuma marcação de página — 02-UI-SPEC.md § Native Materials/zero-one-many); ponto
+/// ativo em `JKColor.jkAccent`, inativos em `.secondary` a 50% de opacidade (constante nomeada
+/// abaixo, não um literal solto), sobreposto ao centro-inferior a `JKSpacing.sm` da borda.
+struct JKPhotoCarousel<Item: Identifiable, ItemContent: View>: View {
+    let items: [Item]
+    @ViewBuilder var content: (Item) -> ItemContent
+
+    @State private var scrolledID: Item.ID?
+
+    private static var dotDiameter: CGFloat { 6 }
+    private static var inactiveDotOpacity: Double { 0.5 }
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(items) { item in
+                    content(item)
+                        .containerRelativeFrame(.horizontal)
+                        .id(item.id)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollIndicators(.hidden)
+        .scrollPosition(id: $scrolledID)
+        .overlay(alignment: .bottom) {
+            if items.count > 1 {
+                pageIndicator
+            }
+        }
+    }
+
+    private var currentID: Item.ID? {
+        scrolledID ?? items.first?.id
+    }
+
+    private var pageIndicator: some View {
+        HStack(spacing: JKSpacing.xs) {
+            ForEach(items) { item in
+                Circle()
+                    .fill(item.id == currentID ? JKColor.jkAccent : Color.secondary.opacity(Self.inactiveDotOpacity))
+                    .frame(width: Self.dotDiameter, height: Self.dotDiameter)
+            }
+        }
+        .padding(.bottom, JKSpacing.sm)
+    }
+}
+
+/// Pílula de menção `@Nome` — cópia da forma de `JKRoleBadge` trocando o fundo por
+/// `JKColor.jkAccent` e renderizando texto em vez de `Label` (01-UI-SPEC.md/02-UI-SPEC.md §
+/// Color: único componente novo autorizado a usar accent como fundo). Usado no compose, no
+/// texto do recado publicado e no texto de comentário (plano 02-07).
+struct JKMentionChip: View {
+    let displayName: String
+
+    var body: some View {
+        Text("@\(displayName)")
+            .font(JKTypography.label)
+            .padding(.horizontal, JKSpacing.sm)
+            .padding(.vertical, JKSpacing.xs)
+            .foregroundStyle(.white)
+            .background(JKColor.jkAccent, in: Capsule())
+    }
+}
+
+/// Fileira de `JKMentionChip` que quebra em várias linhas conforme a largura disponível —
+/// usada no compose (chips das menções selecionadas, plano 02-06 Task 2) e no cartão do feed
+/// (chips das menções do recado publicado, plano 02-06 Task 3). Quem chama decide se a
+/// fileira deve nem renderizar com zero menções (nenhum dos dois pontos de uso mostra a
+/// fileira vazia).
+struct JKMentionChipRow: View {
+    let mentions: [MentionDTO]
+
+    var body: some View {
+        JKFlowLayout(spacing: JKSpacing.xs) {
+            ForEach(mentions, id: \.userID) { mention in
+                JKMentionChip(displayName: mention.displayName ?? JKCopy.householdUnnamedMember)
+            }
+        }
+    }
+}
+
+/// `Layout` mínimo de quebra automática — SwiftUI não tem um "wrap HStack" nativo. Usado só
+/// por `JKMentionChipRow`; não é um componente de propósito geral do design system.
+private struct JKFlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var rowWidth: CGFloat = 0
+        var totalHeight: CGFloat = 0
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if rowWidth + size.width > maxWidth, rowWidth > 0 {
+                totalHeight += rowHeight + spacing
+                rowWidth = 0
+                rowHeight = 0
+            }
+            rowWidth += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        totalHeight += rowHeight
+        return CGSize(width: maxWidth.isFinite ? maxWidth : rowWidth, height: totalHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 

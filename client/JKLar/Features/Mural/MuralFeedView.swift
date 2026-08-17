@@ -113,6 +113,7 @@ struct MuralFeedView: View {
         ForEach(items, id: \.id) { recado in
             RecadoCard(
                 recado: recado,
+                photoURLs: viewModel.photoURLs(for: recado.id),
                 onEdit: { editingRecado = $0; isComposePresented = true },
                 onDelete: handleDelete
             )

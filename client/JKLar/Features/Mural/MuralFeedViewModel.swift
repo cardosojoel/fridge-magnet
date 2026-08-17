@@ -33,6 +33,11 @@ final class MuralFeedViewModel {
     private(set) var state: LoadState = .loading
     private(set) var pageState: PageState = .idle
     private(set) var items: [RecadoDTO] = []
+    /// URLs de leitura por recado (plano 02-06 Task 3) — mapa **só de memória**: URL
+    /// assinada é credencial temporária de leitura (validade curta), então não pode
+    /// sobreviver a um refresh nem ser gravada em disco, preferências ou qualquer cache
+    /// persistente.
+    private(set) var photoURLsByRecado: [UUID: [PhotoDownloadDTO]] = [:]
 
     private var nextCursor: Int64?
     /// Guarda de concorrência: `loadNextPage()` chamado duas vezes ao mesmo tempo dispara
@@ -59,16 +64,43 @@ final class MuralFeedViewModel {
             nextCursor = page.nextCursor
             pageState = page.nextCursor == nil ? .exhausted : .idle
             state = .loaded(items: items)
+            await fetchPhotoURLs(for: items)
         } catch {
             state = .error(message: JKCopy.muralFeedLoadError, lastGood: previousGood)
         }
     }
 
-    /// Pull-to-refresh: descarta o cursor guardado e recarrega a primeira página,
-    /// substituindo a lista — nunca soma com o que já estava carregado.
+    /// Pull-to-refresh: descarta o cursor guardado **e o mapa de URLs de foto** (validade
+    /// curta, não pode sobreviver a um refresh) e recarrega a primeira página, substituindo
+    /// a lista — nunca soma com o que já estava carregado.
     func reloadFromTop() async {
         nextCursor = nil
+        photoURLsByRecado = [:]
         await load()
+    }
+
+    /// URLs de leitura de um recado — vazio quando o recado não tem foto, ou quando a busca
+    /// em lote ainda não resolveu/falhou para ele.
+    func photoURLs(for recadoID: UUID) -> [PhotoDownloadDTO] {
+        photoURLsByRecado[recadoID] ?? []
+    }
+
+    /// Busca em lote (uma única chamada) as URLs de leitura dos recados de `pageItems` que
+    /// têm foto — nunca uma chamada por recado. Uma falha aqui nunca põe o feed em `.error`:
+    /// os recados continuam visíveis com o texto, só o carrossel daquele recado fica sem
+    /// imagem (uma imagem faltando não é motivo para esvaziar a tela).
+    private func fetchPhotoURLs(for pageItems: [RecadoDTO]) async {
+        let recadoIDsWithPhotos = pageItems.filter { !$0.photos.isEmpty }.map(\.id)
+        guard !recadoIDsWithPhotos.isEmpty else { return }
+        do {
+            let response = try await apiClient.photoDownloadURLs(recadoIDs: recadoIDsWithPhotos)
+            for entry in response.recados {
+                photoURLsByRecado[entry.recadoID] = entry.photos
+            }
+        } catch {
+            // Falha silenciosa de propósito: a lista de recados continua visível, só falta
+            // a imagem daquele carrossel.
+        }
     }
 
     /// Rolagem infinita: acrescenta a próxima página ao fim da lista, sem remover os itens
@@ -91,6 +123,9 @@ final class MuralFeedViewModel {
             nextCursor = page.nextCursor
             pageState = page.nextCursor == nil ? .exhausted : .idle
             state = .loaded(items: items)
+            // Só os recados da página nova — os já carregados já têm (ou já tentaram) sua
+            // busca de URLs, refazer a chamada pra eles seria trabalho repetido.
+            await fetchPhotoURLs(for: newItems)
         } catch {
             pageState = .failed(message: JKCopy.muralFeedLoadMoreError)
         }

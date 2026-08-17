@@ -73,6 +73,14 @@ public struct JoinHouseholdRequest: Codable, Sendable {
 /// `DELETE .../members/:memberID` (plano 01-10).
 public struct MemberDTO: Codable, Sendable {
     public var id: UUID
+    /// O `user.id` real por trás desta linha — distinto de `id` (linha de
+    /// `household_members`) de propósito. Plano 02-06: o seletor de menção estruturado
+    /// (D-06) precisa apontar `CreateRecadoRequest.mentionedUserIDs`/`MentionDTO.userID` para
+    /// o `user_id` que o backend valida contra `household_members.user_id`
+    /// (`RecadoController.resolveHouseholdMemberUserIDs`) — mandar `id` (a linha de
+    /// membership) ali seria sempre rejeitado com 422 `notHouseholdMember` para qualquer
+    /// pessoa que não seja o próprio requisitante.
+    public var userID: UUID
     public var displayName: String?
     public var role: MemberRole
     public var joinedAt: Date
@@ -83,8 +91,9 @@ public struct MemberDTO: Codable, Sendable {
     /// duplicados na mesma casa não são impossíveis).
     public var isSelf: Bool
 
-    public init(id: UUID, displayName: String?, role: MemberRole, joinedAt: Date, isSelf: Bool) {
+    public init(id: UUID, userID: UUID, displayName: String?, role: MemberRole, joinedAt: Date, isSelf: Bool) {
         self.id = id
+        self.userID = userID
         self.displayName = displayName
         self.role = role
         self.joinedAt = joinedAt
