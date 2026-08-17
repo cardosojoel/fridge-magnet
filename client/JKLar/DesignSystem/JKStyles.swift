@@ -94,3 +94,55 @@ struct JKRoleBadge: View {
             .background(JKColor.jkCardSurfaceBase, in: Capsule())
     }
 }
+
+/// Esqueleto de carregamento (shimmer) — implementação de `View.jkShimmerPlaceholder(isActive:)`
+/// abaixo, no mesmo molde de `JKGlassBackground` (`ViewModifier` privado + `extension View`).
+///
+/// A Fase 1 desenhou esse shimmer solto direto em `HouseholdView.loadingSkeleton` (3 linhas
+/// de `RoundedRectangle` sobre `.regularMaterial`) sem nunca extrair um modificador
+/// reutilizável — este modificador existe para o feed do mural (plano 02-05) e uma futura
+/// migração da tela da casa não implementarem a mesma animação duas vezes.
+///
+/// Quando `isActive`: sobrepõe uma pulsação de opacidade sobre `JKColor.jkCardSurfaceBase`
+/// no conteúdo redigido (`.redacted(reason: .placeholder)`); uma linha de esqueleto não é
+/// conteúdo real, então fica `.accessibilityHidden(true)` para o VoiceOver não a anunciar.
+/// Quando inativo, devolve o conteúdo intocado.
+private struct JKShimmerPlaceholder: ViewModifier {
+    let isActive: Bool
+    @State private var isAnimating = false
+
+    /// Duração de um ciclo completo (escurecer + clarear) do pulso de shimmer — constante
+    /// nomeada, nunca um literal solto na chamada de `.animation(...)`.
+    private static let cycleDuration: TimeInterval = 1.2
+    private static let minOpacity: Double = 0.35
+    private static let maxOpacity: Double = 0.85
+
+    func body(content: Content) -> some View {
+        if isActive {
+            content
+                .redacted(reason: .placeholder)
+                .background(
+                    JKLayout.cardShape
+                        .fill(JKColor.jkCardSurfaceBase)
+                        .opacity(isAnimating ? Self.maxOpacity : Self.minOpacity)
+                )
+                .accessibilityHidden(true)
+                .onAppear { isAnimating = true }
+                .animation(
+                    .easeInOut(duration: Self.cycleDuration).repeatForever(autoreverses: true),
+                    value: isAnimating
+                )
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    /// Aplica o esqueleto de carregamento (`jkShimmerPlaceholder`) quando `isActive`;
+    /// devolve o conteúdo intocado quando não. Usado pelo estado `.loading` do feed do
+    /// mural (plano 02-05).
+    func jkShimmerPlaceholder(isActive: Bool) -> some View {
+        modifier(JKShimmerPlaceholder(isActive: isActive))
+    }
+}

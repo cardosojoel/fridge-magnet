@@ -205,4 +205,108 @@ enum JKCopy {
     /// D-14: recusar (secundário ou prompt do sistema) nunca bloqueia nada — só reassegura
     /// que dá pra reativar depois, sem insistência.
     static let notificationPrimerReassurance = "Sem problema — você pode ativar isso depois em Ajustes."
+
+    // MARK: - Mural (Fase 2)
+
+    /// Rótulos das duas abas de `RootView.MainTabView` (plano 02-05) — assunção do
+    /// planejador (ver `<planner_assumptions>` do plano), não linha do Copywriting Contract
+    /// do `02-UI-SPEC.md`, mesma disciplina de `JKCopy.appName`/`loginTagline` acima.
+    static let muralTabLabel = "Mural"
+    static let householdTabLabel = "Casa"
+
+    /// String exata do Copywriting Contract (linha "Feed screen title").
+    static let muralFeedTitle = "Mural"
+    /// String exata do Copywriting Contract (linha "Compose entry point (FAB)") — rótulo de
+    /// acessibilidade do FAB `plus.circle.fill`, ícone sem texto visível.
+    static let muralComposeAccessibilityLabel = "Novo recado"
+    /// String exata do Copywriting Contract (linha "Compose sheet title (new)").
+    static let muralComposeTitleNew = "Novo recado"
+    /// String exata do Copywriting Contract (linha "Compose sheet title (editing)").
+    static let muralComposeTitleEditing = "Editar recado"
+    /// String exata do Copywriting Contract (linha "Compose text field placeholder").
+    static let muralComposeTextPlaceholder = "O que está acontecendo em casa?"
+    /// String exata do Copywriting Contract (linha "Compose submit CTA (new)").
+    static let muralComposeSubmitCTANew = "Postar"
+    /// String exata do Copywriting Contract (linha "Compose submit CTA (editing)").
+    static let muralComposeSubmitCTAEditing = "Salvar"
+    /// String exata do Copywriting Contract (linha "Compose — add photos button").
+    static let muralComposeAddPhotosCTA = "Adicionar fotos"
+    /// Contador "{n}/10" mostrado ao lado do botão de adicionar fotos, uma vez que há pelo
+    /// menos uma foto marcada (linha "Compose — add photos button").
+    static func muralComposePhotoCounter(_ staged: Int) -> String { "\(staged)/10" }
+    /// String exata do Copywriting Contract (linha "Compose — photo cap reached").
+    static let muralComposePhotoCapReached = "Você já adicionou o máximo de 10 fotos."
+    /// String exata do Copywriting Contract (linha "Compose — mention picker trigger") —
+    /// reusa `muralMentionPickerTitle`, mesmo texto em dois pontos de entrada distintos
+    /// (botão do compose e título da folha), para não declarar o mesmo literal duas vezes.
+    static let muralComposeMentionPickerTrigger = muralMentionPickerTitle
+    /// String exata do Copywriting Contract (linha "Compose — generic publish error").
+    static let muralComposeGenericPublishError = "Não foi possível publicar. Tente de novo em instantes."
+    /// String exata do Copywriting Contract (linha "Compose — photo upload partial
+    /// failure").
+    static let muralComposePhotoUploadPartialFailure = "Uma ou mais fotos não foram enviadas. Tente novamente."
+
+    /// String exata do Copywriting Contract (linha "Mention picker sheet title") — também a
+    /// cópia do botão que abre a folha (ver `muralComposeMentionPickerTrigger` acima).
+    static let muralMentionPickerTitle = "Marcar alguém"
+    /// String exata do Copywriting Contract (linha "Mention picker search placeholder").
+    static let muralMentionPickerSearchPlaceholder = "Buscar membro"
+    /// String exata do Copywriting Contract (linha "Mention picker — only-member state").
+    static let muralMentionPickerOnlyMemberState = "Você é o único membro da casa — não há ninguém pra marcar."
+    /// String exata do Copywriting Contract (linha "Mention picker — load error") — o
+    /// "Tentar de novo" inline reusa `JKCopy.retryButtonLabel`.
+    static let muralMentionPickerLoadError = "Não foi possível carregar os membros pra marcar."
+
+    /// String exata do Copywriting Contract (linha "Feed — empty state heading").
+    static let muralFeedEmptyHeading = "Ainda não tem recados por aqui"
+    /// String exata do Copywriting Contract (linha "Feed — empty state body").
+    static let muralFeedEmptyBody = "Seja o primeiro a postar algo pra família ver."
+    /// String exata do Copywriting Contract (linha "Feed — load error") — o "Tentar de novo"
+    /// inline reusa `JKCopy.retryButtonLabel`.
+    static let muralFeedLoadError = "Não foi possível carregar o mural."
+    /// String exata do Copywriting Contract (linha "Feed — load-more (pagination) error") —
+    /// o "Tentar de novo" inline reusa `JKCopy.retryButtonLabel`.
+    static let muralFeedLoadMoreError = "Não foi possível carregar mais recados."
+
+    /// String exata do Copywriting Contract (linha "Recado — long text expand").
+    static let muralRecadoExpandText = "ver mais"
+    /// Itens do menu de overflow (linha "Recado — own-post overflow menu").
+    static let muralRecadoEditAction = "Editar"
+    static let muralRecadoDeleteAction = "Apagar"
+    /// String exata do Copywriting Contract (linha "Recado — delete confirmation") — o botão
+    /// de cancelar reusa `JKCopy.cancelButtonLabel`.
+    static let muralRecadoDeleteConfirmMessage = "Apagar este recado? Essa ação não pode ser desfeita."
+    static let muralRecadoDeleteConfirmButton = "Apagar"
+
+    /// String exata do Copywriting Contract (linha "Reaction bar — error after failed tap").
+    static let muralReactionErrorMessage = "Não foi possível reagir. Tente de novo."
+
+    /// String exata do Copywriting Contract (linha "Comment input placeholder").
+    static let muralCommentInputPlaceholder = "Adicionar um comentário..."
+    /// String exata do Copywriting Contract (linha "Comment send button") — rótulo de
+    /// acessibilidade do botão `paperplane.fill`, ícone sem texto visível.
+    static let muralCommentSendAccessibilityLabel = "Enviar comentário"
+    /// String exata do Copywriting Contract (linha "Comment — empty state").
+    static let muralCommentEmptyState = "Nenhum comentário ainda. Seja o primeiro a comentar."
+    /// String exata do Copywriting Contract (linha "Comment — load error") — o "Tentar de
+    /// novo" inline reusa `JKCopy.retryButtonLabel`.
+    static let muralCommentLoadError = "Não foi possível carregar os comentários."
+    /// String exata do Copywriting Contract (linha "Comment — generic post error").
+    static let muralCommentGenericPostError = "Não foi possível enviar o comentário. Tente de novo."
+
+    /// String com interpolação (linha "Feed card — comment-count link").
+    static func muralFeedCommentCountLink(_ count: Int) -> String { "Ver todos os \(count) comentários" }
+
+    /// Título verbatim do push de @menção (linhas "Push — @mention in recado/comment") —
+    /// as duas linhas compartilham o mesmo título.
+    static let muralPushMentionTitle = "Você foi mencionado"
+    /// Corpo verbatim do push de @menção num recado (linha "Push — @mention in recado").
+    static func muralPushMentionInRecadoBody(autor: String, preview: String) -> String {
+        "\(autor) marcou você num recado: \"\(preview)\""
+    }
+    /// Corpo verbatim do push de @menção num comentário (linha "Push — @mention in
+    /// comment").
+    static func muralPushMentionInCommentBody(autor: String, preview: String) -> String {
+        "\(autor) marcou você num comentário: \"\(preview)\""
+    }
 }
