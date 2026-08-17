@@ -67,6 +67,55 @@ final class RecadoControllerTests: XCTestCase {
         return (capturedStatus, capturedPage)
     }
 
+    private static func patchRecado(
+        app: Application,
+        bearer: String,
+        recadoID: UUID,
+        text: String?
+    ) async throws -> (status: HTTPStatus, dto: RecadoDTO?, error: APIErrorResponse?) {
+        var capturedStatus: HTTPStatus = .internalServerError
+        var capturedDTO: RecadoDTO?
+        var capturedError: APIErrorResponse?
+        try await app.testable().test(
+            .PATCH, "/api/v1/recados/\(recadoID.uuidString)",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+                try req.content.encode(UpdateRecadoRequest(text: text), as: .json)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                capturedStatus = res.status
+                if res.status == .ok {
+                    capturedDTO = try res.content.decode(RecadoDTO.self)
+                } else {
+                    capturedError = try? res.content.decode(APIErrorResponse.self)
+                }
+            }
+        )
+        return (capturedStatus, capturedDTO, capturedError)
+    }
+
+    private static func deleteRecado(
+        app: Application,
+        bearer: String,
+        recadoID: UUID
+    ) async throws -> (status: HTTPStatus, error: APIErrorResponse?) {
+        var capturedStatus: HTTPStatus = .internalServerError
+        var capturedError: APIErrorResponse?
+        try await app.testable().test(
+            .DELETE, "/api/v1/recados/\(recadoID.uuidString)",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                capturedStatus = res.status
+                if res.status != .noContent {
+                    capturedError = try? res.content.decode(APIErrorResponse.self)
+                }
+            }
+        )
+        return (capturedStatus, capturedError)
+    }
+
     // MARK: Task 1 — fatia ponta a ponta
 
     func testPostTextRecadoThenFeedReturnsIt() async throws {
@@ -133,6 +182,127 @@ final class RecadoControllerTests: XCTestCase {
             XCTAssertEqual(posted.status, .created)
             let dto = try XCTUnwrap(posted.dto)
             XCTAssertNil(dto.text)
+        }
+    }
+
+    // MARK: Task 2 — edição/remoção só pelo autor (D-03), 404 vs 403
+
+    func testAnotherMemberCannotEditRecado() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 2)
+            let admin = members[0]
+            let adult = members[1]
+
+            let posted = try await Self.postRecado(app: app, bearer: admin.token, text: "recado do admin")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            let patched = try await Self.patchRecado(
+                app: app, bearer: adult.token, recadoID: recadoID, text: "editado por outro"
+            )
+            XCTAssertEqual(patched.status, .forbidden)
+            XCTAssertEqual(patched.error?.code, .notAuthor)
+        }
+    }
+
+    func testAdminCannotEditAnotherMembersRecado() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 2)
+            let admin = members[0]
+            let adult = members[1]
+
+            let posted = try await Self.postRecado(app: app, bearer: adult.token, text: "recado do adulto")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            // D-03: sem exceção de moderação para admin — este é o teste que garante isso.
+            let patched = try await Self.patchRecado(
+                app: app, bearer: admin.token, recadoID: recadoID, text: "editado pelo admin"
+            )
+            XCTAssertEqual(patched.status, .forbidden)
+            XCTAssertEqual(patched.error?.code, .notAuthor)
+        }
+    }
+
+    func testAnotherMemberCannotDeleteRecado() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 2)
+            let admin = members[0]
+            let adult = members[1]
+
+            let posted = try await Self.postRecado(app: app, bearer: admin.token, text: "recado do admin")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            let deleted = try await Self.deleteRecado(app: app, bearer: adult.token, recadoID: recadoID)
+            XCTAssertEqual(deleted.status, .forbidden)
+            XCTAssertEqual(deleted.error?.code, .notAuthor)
+        }
+    }
+
+    func testAdminCannotDeleteAnotherMembersRecado() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 2)
+            let admin = members[0]
+            let adult = members[1]
+
+            let posted = try await Self.postRecado(app: app, bearer: adult.token, text: "recado do adulto")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            let deleted = try await Self.deleteRecado(app: app, bearer: admin.token, recadoID: recadoID)
+            XCTAssertEqual(deleted.status, .forbidden)
+            XCTAssertEqual(deleted.error?.code, .notAuthor)
+        }
+    }
+
+    func testAuthorCanEditOwnRecado() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let admin = members[0]
+
+            let posted = try await Self.postRecado(app: app, bearer: admin.token, text: "texto original")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            let patched = try await Self.patchRecado(
+                app: app, bearer: admin.token, recadoID: recadoID, text: "texto novo"
+            )
+            XCTAssertEqual(patched.status, .ok)
+            XCTAssertEqual(patched.dto?.text, "texto novo")
+        }
+    }
+
+    func testAuthorCanDeleteOwnRecado() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let admin = members[0]
+
+            let posted = try await Self.postRecado(app: app, bearer: admin.token, text: "para apagar")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            let deleted = try await Self.deleteRecado(app: app, bearer: admin.token, recadoID: recadoID)
+            XCTAssertEqual(deleted.status, .noContent)
+
+            let fetched = try await Self.getFeed(app: app, bearer: admin.token)
+            XCTAssertEqual(fetched.page?.items.contains(where: { $0.id == recadoID }), false)
+        }
+    }
+
+    func testRecadoFromAnotherHouseholdIsNotFound() async throws {
+        try await TestSupport.withApp { app in
+            let (_, membersA) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let (_, membersB) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let adminA = membersA[0]
+            let adminB = membersB[0]
+
+            let posted = try await Self.postRecado(app: app, bearer: adminB.token, text: "recado da casa B")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            // RLS já escopou a consulta na casa do requisitante — um recado de outra casa
+            // cai aqui como inexistente, não como proibido (404, nunca 403).
+            let patched = try await Self.patchRecado(
+                app: app, bearer: adminA.token, recadoID: recadoID, text: "tentativa"
+            )
+            XCTAssertEqual(patched.status, .notFound)
+
+            let deleted = try await Self.deleteRecado(app: app, bearer: adminA.token, recadoID: recadoID)
+            XCTAssertEqual(deleted.status, .notFound)
         }
     }
 }
