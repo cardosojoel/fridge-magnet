@@ -115,7 +115,34 @@ public struct RecadoDTO: Codable, Sendable {
     public var myReaction: ReactionKind?
     public var commentCount: Int
     public var latestComments: [CommentDTO]
+    /// Instante da fixação (D-14, plano 02-11) — nulo é "não fixado". Um único campo
+    /// carrega o booleano ("está fixado?") E a chave de ordenação do bloco de fixados
+    /// (mais recente primeiro): o cliente nunca precisa de um segundo campo derivado.
+    public var pinnedAt: Date?
+    /// Instante do arquivamento (D-15, plano 02-11) — nulo é "não arquivado". No feed é
+    /// sempre nulo por construção (recado arquivado não aparece); só a listagem de
+    /// arquivados do admin devolve valor preenchido.
+    public var archivedAt: Date?
+    /// D-14: o requisitante pode fixar/desafixar ESTE recado — verdadeiro para o autor ou
+    /// para quem tem papel de admin, calculado no servidor no mesmo ponto que `isMine`.
+    /// Três sinais e não um (`canPin`/`canArchive`/`canUnarchive`): D-14 e D-15 declaram
+    /// regras diferentes, e colapsá-las gravaria no cliente a suposição de que andam
+    /// juntas. Esconder um item de menu com base nele é conveniência de interface — a
+    /// linha de defesa é a checagem do handler no servidor.
+    public var canPin: Bool
+    /// D-15: o requisitante pode arquivar ESTE recado — autor ou admin, calculado no
+    /// servidor. Mesma nota de `canPin`: sinal de interface, nunca a linha de defesa.
+    public var canArchive: Bool
+    /// D-15: o requisitante pode desarquivar — estritamente admin (o autor não-admin que
+    /// arquivou o próprio recado NÃO o recupera sozinho, decisão explícita do usuário).
+    /// Calculado no servidor; sinal de interface, nunca a linha de defesa.
+    public var canUnarchive: Bool
 
+    // Os cinco parâmetros novos entram com valor padrão de propósito: `RecadoDTO` é
+    // construído em dezenas de pontos de teste (backend e cliente, ondas 1 a 4) e um
+    // parâmetro obrigatório novo quebraria a compilação de todos eles — mesmo precedente
+    // dos campos aditivos anteriores. O servidor sempre passa os cinco explicitamente; o
+    // padrão existe só para os pontos de construção antigos.
     public init(
         id: UUID,
         authorID: UUID,
@@ -130,7 +157,12 @@ public struct RecadoDTO: Codable, Sendable {
         reactions: [ReactionCountDTO],
         myReaction: ReactionKind?,
         commentCount: Int,
-        latestComments: [CommentDTO]
+        latestComments: [CommentDTO],
+        pinnedAt: Date? = nil,
+        archivedAt: Date? = nil,
+        canPin: Bool = false,
+        canArchive: Bool = false,
+        canUnarchive: Bool = false
     ) {
         self.id = id
         self.authorID = authorID
@@ -146,6 +178,11 @@ public struct RecadoDTO: Codable, Sendable {
         self.myReaction = myReaction
         self.commentCount = commentCount
         self.latestComments = latestComments
+        self.pinnedAt = pinnedAt
+        self.archivedAt = archivedAt
+        self.canPin = canPin
+        self.canArchive = canArchive
+        self.canUnarchive = canUnarchive
     }
 }
 
@@ -155,10 +192,38 @@ public struct RecadoDTO: Codable, Sendable {
 public struct RecadoFeedPage: Codable, Sendable {
     public var items: [RecadoDTO]
     public var nextCursor: Int64?
+    /// Bloco de fixados (D-14, plano 02-11) — FORA da paginação por cursor: só vem
+    /// preenchido na primeira página (requisição sem cursor) e é vazio nas seguintes.
+    /// Recados fixados são excluídos de `items` (o fluxo cronológico), de modo que nenhum
+    /// recado é renderizado duas vezes na mesma resposta. Ordenado do mais recentemente
+    /// fixado para o mais antigo.
+    public var pinned: [RecadoDTO]
 
-    public init(items: [RecadoDTO], nextCursor: Int64?) {
+    public init(items: [RecadoDTO], nextCursor: Int64?, pinned: [RecadoDTO] = []) {
         self.items = items
         self.nextCursor = nextCursor
+        self.pinned = pinned
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case nextCursor
+        case pinned
+    }
+
+    // Init manual (mesma razão de `CreateRecadoRequest.init(from:)`): `pinned` ausente do
+    // JSON decodifica como coleção vazia, não como erro. Assimetria deliberada com
+    // `RecadoDTO`, que NÃO ganha decodificação tolerante — o critério é o custo da falha,
+    // não a elegância: um cliente novo contra um servidor ainda não atualizado renderizaria
+    // tela preta no feed (a primeira tela do app), e o feed é a única resposta em que um
+    // campo de coleção pode legitimamente não existir. Dentro de um `RecadoDTO` que o
+    // servidor já mandou, todos os campos vêm juntos: os três sinais de permissão são tão
+    // obrigatórios quanto `isMine`, decodificado sem tolerância desde o plano 02-01.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.items = try container.decode([RecadoDTO].self, forKey: .items)
+        self.nextCursor = try container.decodeIfPresent(Int64.self, forKey: .nextCursor)
+        self.pinned = try container.decodeIfPresent([RecadoDTO].self, forKey: .pinned) ?? []
     }
 }
 

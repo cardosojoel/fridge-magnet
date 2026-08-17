@@ -33,6 +33,18 @@ struct RecadoController: RouteCollection {
     /// Quantos comentários mais recentes o card do feed mostra (02-UI-SPEC.md).
     static let latestCommentsLimit = 2
 
+    /// Guarda de tamanho de resposta da listagem de arquivados (plano 02-11) — NÃO um
+    /// recurso de navegação: o 02-UI-SPEC.md não define paginação para a tela de
+    /// arquivados (painel de curadoria do admin, não um fluxo infinito). Mesmo raciocínio
+    /// do teto de 200 já registrado em `comments`.
+    static let maxArchivedListSize = 200
+
+    /// Guarda de tamanho de resposta do bloco de fixados (plano 02-11) — NÃO um teto de
+    /// produto: o 02-UI-SPEC.md recusa explicitamente definir um limite de quantos recados
+    /// podem estar fixados (linha `overflow | pinned-block`, backstop a reavaliar com uso
+    /// real da família). Existe só para o bloco nunca virar uma resposta patológica.
+    static let maxPinnedBlockSize = 50
+
     func boot(routes: any RoutesBuilder) throws {
         let recados = routes.grouped("api", "v1", "recados")
         let authenticated = recados.grouped(SessionAuthenticator(), User.guardMiddleware())
@@ -53,6 +65,21 @@ struct RecadoController: RouteCollection {
         scoped.delete(":recadoID", "reactions", use: clearReaction)
         scoped.get(":recadoID", "comments", use: comments)
         scoped.post(":recadoID", "comments", use: createComment)
+        // D-14: fixar/desafixar — autor-ou-admin, decidido no handler (`authorOrAdminGuard`
+        // contra o papel de `req.householdContext`). As duas rotas não leem corpo nenhum:
+        // não existe campo que o cliente possa mandar que altere a decisão.
+        scoped.put(":recadoID", "pin", use: pin)
+        scoped.delete(":recadoID", "pin", use: unpin)
+        // D-15: arquivar — mesma linha de defesa autor-ou-admin das rotas de fixação.
+        scoped.put(":recadoID", "archive", use: archive)
+        // Grupo admin derivado de `scoped` (que já carrega MentionPushDispatchMiddleware e
+        // HouseholdContextMiddleware) — derivado de `authenticated`, `req.householdContext`
+        // ainda seria nulo na hora da checagem de papel e o middleware negaria tudo com 403.
+        // A rota de listagem tem componente de caminho constante ("archived"), então não
+        // disputa com nenhuma rota de parâmetro existente.
+        let adminScoped = scoped.grouped(RequireRoleMiddleware([.admin]))
+        adminScoped.get("archived", use: archivedList)
+        adminScoped.delete(":recadoID", "archive", use: unarchive)
     }
 
     // MARK: POST /api/v1/recados
@@ -124,7 +151,9 @@ struct RecadoController: RouteCollection {
             isComment: false
         )
 
-        let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB, logger: req.logger)
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+        )
         return try Self.jsonResponse(dto, status: .created)
     }
 
@@ -143,8 +172,15 @@ struct RecadoController: RouteCollection {
         // linha (02-RESEARCH.md Pitfall 2).
         let cursor: Int64? = try? req.query.get(Int64.self, at: "cursor")
 
+        // Dois filtros além do de casa (plano 02-11): arquivamento ausente tira o recado
+        // arquivado do mural de TODOS (D-15); fixação ausente impede um recado fixado de
+        // aparecer no bloco E no fluxo ("nunca renderizado duas vezes", 02-UI-SPEC.md).
+        // O esquema de cursor fica intacto: o cursor compara valor de `sequence`, nunca
+        // posição — excluir linhas por filtro não abre buraco nele.
         var query = Recado.query(on: req.scopedDB)
             .filter(\.$household.$id == context.householdID)
+            .filter(\.$archivedAt == nil)
+            .filter(\.$pinnedAt == nil)
         if let cursor {
             query = query.filter(\.$sequence < cursor)
         }
@@ -162,11 +198,35 @@ struct RecadoController: RouteCollection {
         var dtos: [RecadoDTO] = []
         dtos.reserveCapacity(items.count)
         for recado in items {
-            dtos.append(try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB, logger: req.logger))
+            dtos.append(try await Self.buildDTO(
+                recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+            ))
+        }
+
+        // Bloco de fixados FORA da paginação por cursor: só na primeira página (requisição
+        // sem cursor); com cursor, coleção vazia sem nenhuma consulta. Consequência aceita:
+        // desafixar um recado no meio de uma rolagem pode fazê-lo reaparecer numa página
+        // seguinte — mesma classe de evento de "um recado novo chega enquanto a pessoa
+        // rola", e o cliente já descarta id repetido em `loadNextPage`.
+        var pinnedDTOs: [RecadoDTO] = []
+        if cursor == nil {
+            let pinnedRows = try await Recado.query(on: req.scopedDB)
+                .filter(\.$household.$id == context.householdID)
+                .filter(\.$pinnedAt != nil)
+                .filter(\.$archivedAt == nil)
+                .sort(\.$pinnedAt, .descending)
+                .limit(Self.maxPinnedBlockSize)
+                .all()
+            pinnedDTOs.reserveCapacity(pinnedRows.count)
+            for recado in pinnedRows {
+                pinnedDTOs.append(try await Self.buildDTO(
+                    recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+                ))
+            }
         }
 
         let nextCursor = hasMore ? items.last?.sequence : nil
-        let feedPage = RecadoFeedPage(items: dtos, nextCursor: nextCursor)
+        let feedPage = RecadoFeedPage(items: dtos, nextCursor: nextCursor, pinned: pinnedDTOs)
         return try Self.jsonResponse(feedPage, status: .ok)
     }
 
@@ -174,7 +234,7 @@ struct RecadoController: RouteCollection {
 
     @Sendable
     func update(req: Request) async throws -> Response {
-        guard req.householdContext != nil else {
+        guard let context = req.householdContext else {
             throw Abort(.forbidden)
         }
         let user = try req.auth.require(User.self)
@@ -260,7 +320,9 @@ struct RecadoController: RouteCollection {
             isComment: false
         )
 
-        let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB, logger: req.logger)
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+        )
         return try Self.jsonResponse(dto, status: .ok)
     }
 
@@ -542,6 +604,188 @@ struct RecadoController: RouteCollection {
         return try Self.jsonResponse(dto, status: .created)
     }
 
+    // MARK: PUT /api/v1/recados/:recadoID/pin
+
+    /// D-14: fixa o recado no topo do mural — autor OU admin, decidido por
+    /// `authorOrAdminGuard`. A rota não decodifica corpo nenhum: não há nada que o cliente
+    /// possa mandar que altere a decisão.
+    @Sendable
+    func pin(req: Request) async throws -> Response {
+        guard let context = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        // Recado arquivado cai aqui como 404 (filtro padrão de `loadRecadoOrNotFound`) —
+        // um recado fora do mural não pode ser fixado.
+        let recado = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
+
+        if let forbidden = try Self.authorOrAdminGuard(recado: recado, userID: userID, role: context.role) {
+            return forbidden
+        }
+
+        // Idempotência que preserva a ordem do bloco: fixar de novo NÃO sobrescreve o
+        // instante original — uma retentativa de rede nunca reordena o bloco de fixados.
+        if recado.pinnedAt == nil {
+            recado.pinnedAt = Date()
+            try await recado.save(on: req.scopedDB)
+        }
+
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+        )
+        return try Self.jsonResponse(dto, status: .ok)
+    }
+
+    // MARK: DELETE /api/v1/recados/:recadoID/pin
+
+    /// D-14: desafixa o recado — mesma matriz autor-ou-admin de `pin`. Idempotente quando a
+    /// fixação já está ausente (200 igual). Sem corpo, mesmo motivo de `pin`.
+    @Sendable
+    func unpin(req: Request) async throws -> Response {
+        guard let context = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        let recado = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
+
+        if let forbidden = try Self.authorOrAdminGuard(recado: recado, userID: userID, role: context.role) {
+            return forbidden
+        }
+
+        recado.pinnedAt = nil
+        try await recado.save(on: req.scopedDB)
+
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+        )
+        return try Self.jsonResponse(dto, status: .ok)
+    }
+
+    // MARK: PUT /api/v1/recados/:recadoID/archive
+
+    /// D-15: arquiva o recado — autor OU admin (`authorOrAdminGuard`), mesma linha de
+    /// defesa de `pin`. Um recado já arquivado cai como 404 no `loadRecadoOrNotFound` (ele
+    /// já saiu do mural — e é isso mesmo). Nenhum corpo é decodificado.
+    @Sendable
+    func archive(req: Request) async throws -> Response {
+        guard let context = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        let recado = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
+
+        if let forbidden = try Self.authorOrAdminGuard(recado: recado, userID: userID, role: context.role) {
+            return forbidden
+        }
+
+        // Arquivar limpa a fixação NO MESMO save: um recado que saiu do mural não pode
+        // continuar preso ao topo do mural — é o que torna literalmente verdadeira a
+        // promessa de D-15 de que desarquivar devolve o recado à posição cronológica
+        // natural (sem isto, ele voltaria ao bloco de fixados no dia do desarquivamento).
+        recado.archivedAt = Date()
+        recado.pinnedAt = nil
+        try await recado.save(on: req.scopedDB)
+
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+        )
+        return try Self.jsonResponse(dto, status: .ok)
+    }
+
+    // MARK: DELETE /api/v1/recados/:recadoID/archive (admin-only)
+
+    /// D-15: desarquiva — estritamente admin, negado pelo middleware de papel (grupo
+    /// `adminScoped` do `boot`) ANTES de este handler rodar. O handler deliberadamente NÃO repete a checagem de
+    /// papel: o middleware já negou quem não é admin, e uma segunda checagem aqui seria uma
+    /// segunda fonte de verdade a divergir. Única rota que enxerga recado arquivado
+    /// (`includeArchived: true`) — é o caminho de volta. Não toca a fixação: desarquivar
+    /// devolve o recado à ordenação cronológica (`sequence`), nunca ao bloco de fixados.
+    @Sendable
+    func unarchive(req: Request) async throws -> Response {
+        guard let householdContext = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        let recado = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB, includeArchived: true)
+
+        // Idempotente quando o arquivamento já está ausente (200 igual).
+        recado.archivedAt = nil
+        try await recado.save(on: req.scopedDB)
+
+        let dto = try await Self.buildDTO(
+            recado: recado, requesterID: userID, viewerRole: householdContext.role, on: req.scopedDB, logger: req.logger
+        )
+        return try Self.jsonResponse(dto, status: .ok)
+    }
+
+    // MARK: GET /api/v1/recados/archived (admin-only)
+
+    /// D-15: painel de arquivados do admin — também negado pelo middleware de papel antes
+    /// do handler. Escopado na casa do contexto (a RLS já garante; o filtro explícito
+    /// documenta), ordenado do mais recentemente arquivado para o mais antigo. Resposta é
+    /// uma coleção simples, não uma página com cursor: a tela é um painel de curadoria,
+    /// não um fluxo infinito.
+    @Sendable
+    func archivedList(req: Request) async throws -> Response {
+        guard let householdContext = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        let rows = try await Recado.query(on: req.scopedDB)
+            .filter(\.$household.$id == householdContext.householdID)
+            .filter(\.$archivedAt != nil)
+            .sort(\.$archivedAt, .descending)
+            .limit(Self.maxArchivedListSize)
+            .all()
+
+        var dtos: [RecadoDTO] = []
+        dtos.reserveCapacity(rows.count)
+        for recado in rows {
+            dtos.append(try await Self.buildDTO(
+                recado: recado, requesterID: userID, viewerRole: householdContext.role, on: req.scopedDB, logger: req.logger
+            ))
+        }
+        return try Self.jsonResponse(dtos, status: .ok)
+    }
+
     // MARK: Mapeamento Recado → RecadoDTO
 
     /// Preenche todos os campos consultando de verdade `recado_photos`, `recado_mentions`,
@@ -549,9 +793,15 @@ struct RecadoController: RouteCollection {
     /// comentários mais recentes). Enquanto nenhuma rota escrever nessas quatro tabelas,
     /// essas consultas devolvem coleção vazia e contagem zero — o estado verdadeiro do
     /// banco nesta fase, não um valor fixo no código.
+    ///
+    /// `viewerRole` (plano 02-11) é a ÚNICA fonte dos três sinais de permissão
+    /// (`canPin`/`canArchive`/`canUnarchive`), calculados aqui no mesmo ponto que `isMine` —
+    /// derivá-los no cliente reintroduziria a regra de autorização no front-end, contra a
+    /// diretriz de zero-trust do `.claude/CLAUDE.md`.
     private static func buildDTO(
         recado: Recado,
         requesterID: UUID,
+        viewerRole: MemberRole,
         on database: any Database,
         logger: Logger
     ) async throws -> RecadoDTO {
@@ -598,11 +848,14 @@ struct RecadoController: RouteCollection {
             latestComments.append(try await Self.buildCommentDTO(comment: comment, requesterID: requesterID, on: database))
         }
 
+        let isMine = recado.$author.id == requesterID
+        let isAdmin = viewerRole == .admin
+
         return RecadoDTO(
             id: recadoID,
             authorID: recado.$author.id,
             authorDisplayName: author.displayName,
-            isMine: recado.$author.id == requesterID,
+            isMine: isMine,
             text: recado.text,
             sequence: recado.sequence,
             createdAt: recado.createdAt ?? Date(),
@@ -612,7 +865,12 @@ struct RecadoController: RouteCollection {
             reactions: reactionSummary.reactions,
             myReaction: reactionSummary.myReaction,
             commentCount: commentCount,
-            latestComments: latestComments
+            latestComments: latestComments,
+            pinnedAt: recado.pinnedAt,
+            archivedAt: recado.archivedAt,
+            canPin: isMine || isAdmin,
+            canArchive: isMine || isAdmin,
+            canUnarchive: isAdmin
         )
     }
 
@@ -702,14 +960,45 @@ struct RecadoController: RouteCollection {
     /// existência de uma linha alheia). Extraído de `update`/`destroy` (plano 02-01) para as
     /// rotas de reação e comentário deste plano compartilharem exatamente o mesmo
     /// comportamento.
-    private static func loadRecadoOrNotFound(_ recadoID: UUID, on db: any Database) async throws -> Recado {
-        guard let recado = try await Recado.query(on: db)
+    ///
+    /// `includeArchived` com padrão `false` (D-15, plano 02-11): este é o ponto ÚNICO que
+    /// torna um recado arquivado invisível — 404 para TODO papel, inclusive admin (um 404
+    /// que dependesse do papel seria, ele próprio, um oráculo de existência da linha). O
+    /// padrão falso é deliberado: toda rota existente herda a invisibilidade sem ser editada
+    /// uma por uma, e só a rota de desarquivar passa `includeArchived: true`.
+    private static func loadRecadoOrNotFound(
+        _ recadoID: UUID,
+        on db: any Database,
+        includeArchived: Bool = false
+    ) async throws -> Recado {
+        var query = Recado.query(on: db)
             .filter(\.$id == recadoID)
-            .first()
-        else {
+        if !includeArchived {
+            query = query.filter(\.$archivedAt == nil)
+        }
+        guard let recado = try await query.first() else {
             throw Abort(.notFound)
         }
         return recado
+    }
+
+    // MARK: Fixar/arquivar — autorização autor-ou-admin (D-14/D-15, plano 02-11)
+
+    /// Devolve `nil` quando o requisitante é o autor OU tem papel de admin; caso contrário,
+    /// a resposta 403. Reusa `APIErrorCode.forbidden` (não `.notAuthor`, que diria "só o
+    /// autor" — falso aqui: a regra de D-14/D-15 é autor-ou-admin) com a mesma mensagem do
+    /// `RequireRoleMiddleware`. O papel vem de `req.householdContext`, lido da linha real de
+    /// `household_members` dentro da transação da request — nunca de claim do token, nunca
+    /// de cabeçalho, nunca de campo do corpo.
+    private static func authorOrAdminGuard(recado: Recado, userID: UUID, role: MemberRole) throws -> Response? {
+        if recado.$author.id == userID || role == .admin {
+            return nil
+        }
+        return try Self.errorResponse(
+            code: .forbidden,
+            message: "Você não tem permissão para esta ação.",
+            status: .forbidden
+        )
     }
 
     // MARK: Menções (plano 02-02, D-05/D-06)
