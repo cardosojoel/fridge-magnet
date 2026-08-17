@@ -30,7 +30,11 @@ struct RecadoController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         let recados = routes.grouped("api", "v1", "recados")
         let authenticated = recados.grouped(SessionAuthenticator(), User.guardMiddleware())
-        let scoped = authenticated.grouped(HouseholdContextMiddleware())
+        // MentionPushDispatchMiddleware precisa envolver HouseholdContextMiddleware por
+        // FORA (nesta ordem no .grouped) — é a única posição do encadeamento que roda
+        // depois que a transação de HouseholdContextMiddleware fecha. Inverter esta ordem
+        // reintroduz o push-antes-do-commit (plano 02-02, T-02-13).
+        let scoped = authenticated.grouped(MentionPushDispatchMiddleware(), HouseholdContextMiddleware())
 
         scoped.post(use: create)
         scoped.get(use: feed)
@@ -96,6 +100,16 @@ struct RecadoController: RouteCollection {
             )
             try await mention.save(on: req.scopedDB)
         }
+
+        try await Self.enqueueMentionPushes(
+            for: req,
+            recipients: mentionedUserIDs,
+            authorID: userID,
+            authorName: user.displayName ?? "Alguém",
+            text: normalizedText,
+            hasPhotos: false,
+            isComment: false
+        )
 
         let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB)
         return try Self.jsonResponse(dto, status: .created)
@@ -227,6 +241,16 @@ struct RecadoController: RouteCollection {
 
         recado.text = normalizedText
         try await recado.save(on: req.scopedDB)
+
+        try await Self.enqueueMentionPushes(
+            for: req,
+            recipients: addedUserIDs,
+            authorID: recado.$author.id,
+            authorName: user.displayName ?? "Alguém",
+            text: normalizedText,
+            hasPhotos: false,
+            isComment: false
+        )
 
         let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB)
         return try Self.jsonResponse(dto, status: .ok)
@@ -441,6 +465,45 @@ struct RecadoController: RouteCollection {
             throw MentionValidationError()
         }
         return deduplicated
+    }
+
+    /// Enfileira um `PendingMentionPush` por device token de cada destinatário em
+    /// `req.pendingMentionPushes` — nunca envia daqui diretamente.
+    /// `MentionPushDispatchMiddleware` consome a fila depois que a transação de
+    /// `HouseholdContextMiddleware` fecha com sucesso (T-02-13). Marcar a si mesmo grava a
+    /// linha de menção (marcação social legítima), mas nunca gera push para o próprio autor.
+    /// Um destinatário sem token registrado simplesmente não gera entrada — ausência de push
+    /// não é erro. `isComment` seleciona o corpo de cópia certo (D-09, reusado pelo plano
+    /// 02-03 a partir da criação de comentário).
+    private static func enqueueMentionPushes(
+        for req: Request,
+        recipients: [UUID],
+        authorID: UUID,
+        authorName: String,
+        text: String?,
+        hasPhotos: Bool,
+        isComment: Bool
+    ) async throws {
+        let notifiableRecipients = recipients.filter { $0 != authorID }
+        guard !notifiableRecipients.isEmpty else { return }
+
+        let preview = MuralPushCopy.preview(fromText: text, hasPhotos: hasPhotos)
+        let body = isComment
+            ? MuralPushCopy.commentMentionBody(author: authorName, preview: preview)
+            : MuralPushCopy.recadoMentionBody(author: authorName, preview: preview)
+
+        // Ainda dentro da transação escopada da request — a RLS de device_tokens está ativa
+        // e vê os tokens da casa.
+        let tokens = try await DeviceToken.query(on: req.scopedDB)
+            .filter(\.$user.$id ~~ notifiableRecipients)
+            .all()
+
+        var pending = req.pendingMentionPushes
+        for token in tokens {
+            guard let tokenID = token.id else { continue }
+            pending.append(PendingMentionPush(deviceTokenID: tokenID, title: MuralPushCopy.mentionTitle, body: body))
+        }
+        req.pendingMentionPushes = pending
     }
 
     /// Trim + normaliza string vazia para `nil` (D-01: um recado sem texto tem `text ==

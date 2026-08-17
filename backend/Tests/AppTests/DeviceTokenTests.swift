@@ -422,16 +422,24 @@ final class DeviceTokenTests: XCTestCase {
     }
 }
 
-/// Cliente falso de push — usado só por `DeviceTokenTests` (nenhum teste fala com o APNs de
-/// verdade). `failOnce(forDeviceToken:)` simula exatamente um `BadDeviceToken` para o próximo
-/// envio a esse token; qualquer envio depois disso (o retry corrigido de `PushService`)
-/// sucede e fica registrado em `sentNotifications`.
+/// Cliente falso de push — usado por `DeviceTokenTests` e por `RecadoMentionPushTests`
+/// (plano 02-02), nenhum teste fala com o APNs de verdade. `failOnce(forDeviceToken:)` simula
+/// exatamente um `BadDeviceToken` para o próximo envio a esse token; qualquer envio depois
+/// disso (o retry corrigido de `PushService`) sucede e fica registrado em
+/// `sentNotifications`. `failAlways(forDeviceToken:)` (plano 02-02) simula um token
+/// permanentemente morto — cada envio a ele falha, num `Set` separado do de `failOnce` para
+/// não alterar o comportamento existente do teste do D-16.
 actor FakePushClient: PushClient {
     private(set) var sentNotifications: [(token: String, environment: APNSEnvironment, title: String, body: String)] = []
     private var tokensThatFailOnce: Set<String> = []
+    private var tokensThatAlwaysFail: Set<String> = []
 
     func failOnce(forDeviceToken token: String) {
         tokensThatFailOnce.insert(token)
+    }
+
+    func failAlways(forDeviceToken token: String) {
+        tokensThatAlwaysFail.insert(token)
     }
 
     func sendAlertNotification(
@@ -440,6 +448,9 @@ actor FakePushClient: PushClient {
         title: String,
         body: String
     ) async throws {
+        if tokensThatAlwaysFail.contains(deviceToken) {
+            throw BadDeviceTokenError()
+        }
         if tokensThatFailOnce.remove(deviceToken) != nil {
             throw BadDeviceTokenError()
         }
