@@ -231,6 +231,114 @@ private struct JKFlowLayout: Layout {
     }
 }
 
+/// Barra de reações de conjunto fechado (D-07/D-07b, plano 02-07) — deriva os 6 botões do
+/// `CaseIterable` do enum compartilhado, nunca uma lista escrita à mão, para acrescentar um
+/// emoji no futuro ser uma edição do enum e não da view. Glifo sem nenhum estilo de cor aplicado
+/// (02-UI-SPEC.md § Color: "o glifo em si nunca recebe estilo de cor") — o botão do
+/// `myReaction` ativo recebe fundo `jkAccent` em `Capsule()`, único lugar onde cor entra na
+/// barra. A linha de resumo abaixo só é renderizada quando a soma das contagens é > 0
+/// (02-UI-SPEC.md "empty | reaction-bar"); numeral simples, sem ramificação de singular/
+/// plural ("zero-one-many | reaction-bar").
+struct JKReactionBar: View {
+    let reactions: [ReactionCountDTO]
+    let myReaction: ReactionKind?
+    let onTap: (ReactionKind) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: JKSpacing.sm) {
+            HStack(spacing: JKSpacing.xs) {
+                ForEach(ReactionKind.allCases, id: \.self) { kind in
+                    reactionButton(kind)
+                }
+            }
+
+            if totalCount > 0 {
+                summaryRow
+            }
+        }
+    }
+
+    private func reactionButton(_ kind: ReactionKind) -> some View {
+        let isActive = myReaction == kind
+        return Button {
+            onTap(kind)
+        } label: {
+            Text(kind.glyph)
+                .frame(width: JKLayout.minTapTarget, height: JKLayout.minTapTarget)
+                .background(isActive ? JKColor.jkAccent : Color.clear, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(kind.rawValue)
+    }
+
+    private var totalCount: Int {
+        reactions.reduce(0) { $0 + $1.count }
+    }
+
+    /// Cada emoji presente (contagem > 0) com o numeral ao lado — `JKSpacing.xs` entre glifo
+    /// e numeral (§Spacing Scale), destaque `jkAccent` no do próprio requisitante.
+    private var summaryRow: some View {
+        HStack(spacing: JKSpacing.sm) {
+            ForEach(reactions.filter { $0.count > 0 }, id: \.kind) { entry in
+                HStack(spacing: JKSpacing.xs) {
+                    Text(entry.kind.glyph)
+                    Text("\(entry.count)")
+                        .font(JKTypography.label)
+                        .foregroundStyle(entry.kind == myReaction ? JKColor.jkAccent : Color.secondary)
+                }
+            }
+        }
+    }
+}
+
+/// Linha de um comentário em lista plana cronológica (D-08, plano 02-07) — avatar (círculo
+/// com a inicial, mesmo tratamento da linha de membro da Fase 1), nome, texto com menções
+/// inline em `JKMentionChip`, e horário relativo. Altura mínima `JKLayout.memberRowMinHeight`
+/// — mesma constante já usada pela lista de membros e pelo seletor de menção, para caber
+/// avatar + nome + texto sem violar a área de toque mínima da linha.
+struct JKCommentRow: View {
+    let comment: CommentDTO
+
+    var body: some View {
+        HStack(alignment: .top, spacing: JKSpacing.sm) {
+            avatar
+
+            VStack(alignment: .leading, spacing: JKSpacing.xs) {
+                HStack(spacing: JKSpacing.xs) {
+                    Text(comment.authorDisplayName ?? JKCopy.householdUnnamedMember)
+                        .font(JKTypography.body.weight(.semibold))
+                        .lineLimit(1)
+                    Text(comment.createdAt, style: .relative)
+                        .font(JKTypography.label)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(comment.text)
+                    .font(JKTypography.body)
+
+                if !comment.mentions.isEmpty {
+                    JKMentionChipRow(mentions: comment.mentions)
+                }
+            }
+        }
+        .frame(minHeight: JKLayout.memberRowMinHeight, alignment: .top)
+    }
+
+    private var avatar: some View {
+        Circle()
+            .fill(JKColor.jkCardSurfaceBase)
+            .overlay(
+                Text(initial)
+                    .font(JKTypography.label.weight(.semibold))
+            )
+            .frame(width: JKSpacing.xl, height: JKSpacing.xl)
+    }
+
+    private var initial: String {
+        String((comment.authorDisplayName ?? JKCopy.householdUnnamedMember).prefix(1)).uppercased()
+    }
+}
+
 /// Esqueleto de carregamento (shimmer) — implementação de `View.jkShimmerPlaceholder(isActive:)`
 /// abaixo, no mesmo molde de `JKGlassBackground` (`ViewModifier` privado + `extension View`).
 ///
