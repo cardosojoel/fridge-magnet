@@ -347,4 +347,50 @@ enum JKCopy {
     static func muralPushMentionInCommentBody(autor: String, preview: String) -> String {
         "\(autor) marcou você num comentário: \"\(preview)\""
     }
+
+    // Fixar/arquivar (Adendo 2 do 02-UI-SPEC.md, D-14/D-15, plano 02-12) — mesma seção de
+    // mural, mesma disciplina: toda string vem da tabela "Copywriting Contract — Addendum 2".
+    // O botão de cancelar do diálogo de arquivar reusa `cancelButtonLabel` e o "Tentar de
+    // novo" da tela de arquivados reusa `retryButtonLabel` — nunca duplicatas.
+
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Recado — overflow menu:
+    /// pin").
+    static let muralRecadoPinAction = "Fixar"
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Recado — overflow menu:
+    /// unpin").
+    static let muralRecadoUnpinAction = "Desafixar"
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Recado — pinned badge") —
+    /// também o rótulo de acessibilidade do selo, por contrato.
+    static let muralRecadoPinnedBadgeLabel = "Fixado"
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Recado — overflow menu:
+    /// archive").
+    static let muralRecadoArchiveAction = "Arquivar"
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Recado — archive
+    /// confirmation") — a cópia diz explicitamente que só o admin desarquiva (D-15).
+    static let muralRecadoArchiveConfirmMessage = "Arquivar este recado? Ele sai do mural de todos e só o admin pode desarquivar."
+    /// Botão de confirmação da mesma linha do contrato — estilo padrão, nunca destrutivo
+    /// (arquivar é recuperável pelo admin; apagar não é).
+    static let muralRecadoArchiveConfirmButton = "Arquivar"
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Recado — menu-action
+    /// error") — UMA string compartilhada por fixar/desafixar/arquivar/desarquivar, exibida
+    /// inline no cartão afetado, no mesmo espaço do erro de reação.
+    static let muralMenuActionErrorMessage = "Não foi possível concluir a ação. Tente de novo."
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Casa — archived row
+    /// (admin-only)").
+    static let householdArchivedRowLabel = "Arquivados"
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Arquivados — screen
+    /// title").
+    static let muralArchivedTitle = "Arquivados"
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Arquivados — empty state
+    /// heading").
+    static let muralArchivedEmptyHeading = "Nenhum recado arquivado"
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Arquivados — empty state
+    /// body").
+    static let muralArchivedEmptyBody = "Recados arquivados pelo autor ou pelo admin ficam aqui até serem desarquivados."
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Arquivados — load error")
+    /// — o "Tentar de novo" inline reusa `JKCopy.retryButtonLabel`.
+    static let muralArchivedLoadError = "Não foi possível carregar os arquivados."
+    /// String exata do Copywriting Contract — Addendum 2 (linha "Arquivados — unarchive
+    /// CTA").
+    static let muralArchivedUnarchiveCTA = "Desarquivar"
 }

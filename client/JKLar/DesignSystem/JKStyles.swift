@@ -390,3 +390,20 @@ extension View {
         modifier(JKShimmerPlaceholder(isActive: isActive))
     }
 }
+
+/// Selo de recado fixado (D-14, plano 02-12) — pílula compacta `pin.fill` + "Fixado", no
+/// mesmo molde de `JKRoleBadge`: cápsula sobre `JKColor.jkCardSurfaceBase`, papel
+/// tipográfico de rótulo. Foreground **neutro** de propósito: a lista de usos reservados de
+/// destaque do `02-UI-SPEC.md` não cresce para isto — o selo é estado só de leitura, não
+/// seleção ativa (mesmo precedente da linha de localização publicada do Adendo 1). Rótulo de
+/// acessibilidade igual à cópia do selo, por contrato ("the badge reads 'Fixado'").
+struct JKPinnedBadge: View {
+    var body: some View {
+        Label(JKCopy.muralRecadoPinnedBadgeLabel, systemImage: "pin.fill")
+            .font(JKTypography.label)
+            .padding(.horizontal, JKSpacing.sm)
+            .padding(.vertical, JKSpacing.xs)
+            .background(JKColor.jkCardSurfaceBase, in: Capsule())
+            .accessibilityLabel(JKCopy.muralRecadoPinnedBadgeLabel)
+    }
+}

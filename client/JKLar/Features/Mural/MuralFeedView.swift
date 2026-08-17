@@ -129,7 +129,13 @@ struct MuralFeedView: View {
                 onReact: { kind in
                     Task { await viewModel.toggleReaction(recadoID: recado.id, kind: kind) }
                 },
-                reactionErrorMessage: viewModel.actionErrorRecadoID == recado.id ? viewModel.actionErrorMessage : nil,
+                // Task 1 do plano 02-12: closures vazias de propósito — os métodos reais do
+                // view-model (pin/unpin/archive) nascem na Task 2, que substitui estas
+                // ligações pela real.
+                onPin: { _ in },
+                onUnpin: { _ in },
+                onArchive: { _ in },
+                inlineErrorMessage: viewModel.actionErrorRecadoID == recado.id ? viewModel.actionErrorMessage : nil,
                 onOpenDetail: { selectedRecado = recado }
             )
             .plainRow()

@@ -382,6 +382,80 @@ actor APIClient {
         return try Self.decode(CommentDTO.self, from: data)
     }
 
+    /// `PUT /api/v1/recados/:recadoID/pin` (plano 02-12, rota do plano 02-11) — fixa o
+    /// recado no topo do mural (D-14). Sem corpo: não há nada que o cliente possa mandar que
+    /// altere a decisão. A autorização (autor OU admin) é decidida no servidor a cada
+    /// requisição; modos de falha tipados que a interface precisa distinguir: `.forbidden`
+    /// (403 de quem não pode) e o 404 de recado que já saiu do mural — por isso
+    /// `Self.typedError(...)` em vez de `.http(status:)` cru.
+    func pinRecado(id: UUID) async throws -> RecadoDTO {
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(id.uuidString)/pin", method: "PUT", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(RecadoDTO.self, from: data)
+    }
+
+    /// `DELETE /api/v1/recados/:recadoID/pin` (plano 02-12, rota do plano 02-11) — desafixa
+    /// o recado (D-14). Mesma matriz de autorização autor-ou-admin e mesmos modos de falha
+    /// tipados de `pinRecado`; idempotente no servidor quando a fixação já está ausente.
+    func unpinRecado(id: UUID) async throws -> RecadoDTO {
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(id.uuidString)/pin", method: "DELETE", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(RecadoDTO.self, from: data)
+    }
+
+    /// `PUT /api/v1/recados/:recadoID/archive` (plano 02-12, rota do plano 02-11) — arquiva
+    /// o recado (D-15): ele some do mural de todos e só o admin desarquiva. Autor OU admin,
+    /// decidido no servidor; mesmos modos de falha tipados de `pinRecado` (403 de permissão,
+    /// 404 de recado que já saiu do mural).
+    func archiveRecado(id: UUID) async throws -> RecadoDTO {
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(id.uuidString)/archive", method: "PUT", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(RecadoDTO.self, from: data)
+    }
+
+    /// `DELETE /api/v1/recados/:recadoID/archive` (plano 02-12, rota do plano 02-11) —
+    /// desarquiva (D-15). Estritamente admin: a rota inteira é negada pelo middleware de
+    /// papel no servidor antes de qualquer handler rodar — o cliente esconder o botão de
+    /// quem não é admin é conforto de interface, não defesa. Erro tipado esperado para o
+    /// 403 de quem chegou aqui sem papel, por isso `Self.typedError(...)`.
+    func unarchiveRecado(id: UUID) async throws -> RecadoDTO {
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(id.uuidString)/archive", method: "DELETE", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(RecadoDTO.self, from: data)
+    }
+
+    /// `GET /api/v1/recados/archived` (plano 02-12, rota do plano 02-11) — painel de
+    /// arquivados do admin (D-15), ordenado do mais recentemente arquivado pelo servidor.
+    /// Também negada pelo middleware de papel antes de qualquer handler — a linha escondida
+    /// na aba Casa é conveniência, quem nega de verdade é o 403 do servidor. Sem ramo de
+    /// erro tipado com significado para a interface (a tela só distingue "carregou" de "não
+    /// carregou"), por isso `.http(status:)` cru, mesmo padrão de `feed(cursor:)`.
+    func archivedRecados() async throws -> [RecadoDTO] {
+        let (data, response) = try await send(
+            path: "api/v1/recados/archived", method: "GET", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+        return try Self.decode([RecadoDTO].self, from: data)
+    }
+
     /// `POST /api/v1/auth/logout` — D-11: o logout do servidor é o que vale. Sempre apaga o
     /// Keychain local, mesmo que a chamada de rede falhe (o dispositivo não deve continuar
     /// achando que está logado só porque a rede caiu no momento do logout).
