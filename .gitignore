@@ -2,6 +2,7 @@
 
 # Worktrees criados pelos executores GSD durante execução paralela de fases — efêmeros, nunca versionados
 .claude/worktrees/
+.gsd/
 
 # Build artifacts
 .build/
