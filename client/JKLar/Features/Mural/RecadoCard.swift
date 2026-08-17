@@ -14,15 +14,16 @@ extension RecadoDTO: Identifiable {}
 
 /// Um recado do feed, envolto em `JKCard` (01-UI-SPEC.md § Native Materials).
 ///
-/// Composição completa (planos 02-05/02-06/02-07), nesta ordem — a ordem é contrato do
-/// `02-UI-SPEC.md` § Native Materials, não preferência: nome do autor + horário relativo,
-/// carrossel de fotos (quando há foto), texto com truncagem em ~5 linhas e "ver mais" inline,
-/// chips de menção (quando há menção), barra de reação de conjunto fechado (D-07/D-07b), e
-/// prévia dos 2 últimos comentários com link para o detalhe a partir de 3. O menu de overflow
-/// `ellipsis` (Editar/Apagar) é mostrado **somente** quando `recado.isMine` — sinal já
-/// calculado pelo servidor (D-03), o cliente nunca decide isso comparando nome/posição. O
-/// diálogo de confirmação de apagar mora aqui (não no chamador): `onDelete` só é invocado
-/// depois que a pessoa confirma no diálogo destrutivo.
+/// Composição completa (planos 02-05/02-06/02-07/02-12), nesta ordem — a ordem é contrato do
+/// `02-UI-SPEC.md` § Native Materials, não preferência: selo de fixado (quando fixado, D-14),
+/// nome do autor + horário relativo, carrossel de fotos (quando há foto), texto com truncagem
+/// em ~5 linhas e "ver mais" inline, chips de menção (quando há menção), barra de reação de
+/// conjunto fechado (D-07/D-07b), e prévia dos 2 últimos comentários com link para o detalhe
+/// a partir de 3. O menu de overflow `ellipsis` é mostrado quando há algum item para exibir:
+/// o recado é meu (Editar/Apagar, D-03) **ou** algum sinal de permissão calculado no servidor
+/// (`canPin`/`canArchive`, D-14/D-15) está verdadeiro — o cliente nunca decide isso comparando
+/// papel/nome/posição. Os diálogos de confirmação de apagar e de arquivar moram aqui (não no
+/// chamador): `onDelete`/`onArchive` só são invocados depois que a pessoa confirma.
 struct RecadoCard: View {
     let recado: RecadoDTO
     /// URLs de leitura das fotos deste recado — passadas pela view pai
@@ -34,21 +35,40 @@ struct RecadoCard: View {
     /// Toque num emoji da barra — o chamador (`MuralFeedView`) liga isto a
     /// `viewModel.toggleReaction(recadoID:kind:)`; o cartão em si não fala com a rede.
     var onReact: (ReactionKind) -> Void
-    /// Mensagem inline de uma reação que falhou neste recado especificamente — `nil` na
-    /// maior parte do tempo; `MuralFeedView` só preenche quando
-    /// `viewModel.actionErrorRecadoID == recado.id`, pra uma falha de reação num cartão não
-    /// aparecer pendurada embaixo de todos os outros cartões da lista.
-    var reactionErrorMessage: String? = nil
+    /// Fixar este recado (D-14, plano 02-12) — só chamado quando `recado.canPin` deixou o
+    /// item aparecer; a decisão real é do servidor, a cada requisição.
+    var onPin: (RecadoDTO) -> Void
+    /// Desafixar este recado (D-14) — mesmo contrato de `onPin`.
+    var onUnpin: (RecadoDTO) -> Void
+    /// Arquivar este recado (D-15) — só invocado DEPOIS da confirmação no diálogo próprio
+    /// (estilo padrão, não destrutivo).
+    var onArchive: (RecadoDTO) -> Void
+    /// Mensagem inline de uma ação que falhou neste recado especificamente — `nil` na maior
+    /// parte do tempo; `MuralFeedView` só preenche quando
+    /// `viewModel.actionErrorRecadoID == recado.id`, pra uma falha num cartão não aparecer
+    /// pendurada embaixo de todos os outros cartões da lista. Nome neutro de propósito
+    /// (plano 02-12): o mesmo espaço abaixo da barra recebe tanto o erro de reação quanto o
+    /// erro de ação de menu (fixar/desafixar/arquivar) — um nome que dissesse "reação"
+    /// mentiria.
+    var inlineErrorMessage: String? = nil
     /// Abre `RecadoDetailView` deste recado — único caminho de navegação pra comentários além
     /// da prévia de 2 (02-UI-SPEC.md § Copywriting Contract, "Feed card — comment-count link").
     var onOpenDetail: () -> Void
 
     @State private var isTextExpanded = false
     @State private var isDeleteConfirmationPresented = false
+    @State private var isArchiveConfirmationPresented = false
 
     var body: some View {
         JKCard {
             VStack(alignment: .leading, spacing: JKSpacing.sm) {
+                // Selo de fixado acima do cabeçalho do autor (D-14) — só quando o instante
+                // de fixação existe; sem fixação, nada é desenhado (convenção de silêncio
+                // na ausência, mesma das fotos e das menções).
+                if recado.pinnedAt != nil {
+                    JKPinnedBadge()
+                }
+
                 header
 
                 if !recado.photos.isEmpty {
@@ -84,6 +104,22 @@ struct RecadoCard: View {
         } message: {
             Text(JKCopy.muralRecadoDeleteConfirmMessage)
         }
+        .confirmationDialog(
+            JKCopy.muralRecadoArchiveAction,
+            isPresented: $isArchiveConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            // Deliberadamente SEM papel destrutivo no botão de confirmar (diferença única
+            // em relação ao diálogo de apagar acima): arquivar é recuperável (pelo admin),
+            // apagar não é — usar o mesmo vermelho para os dois apagaria a distinção
+            // justamente no momento em que ela importa (02-UI-SPEC.md § Addendum 2, D-15).
+            Button(JKCopy.muralRecadoArchiveConfirmButton) {
+                onArchive(recado)
+            }
+            Button(JKCopy.cancelButtonLabel, role: .cancel) {}
+        } message: {
+            Text(JKCopy.muralRecadoArchiveConfirmMessage)
+        }
     }
 
     /// Barra de reação completa + mensagem de erro inline quando a reação deste cartão
@@ -93,8 +129,8 @@ struct RecadoCard: View {
         VStack(alignment: .leading, spacing: JKSpacing.xs) {
             JKReactionBar(reactions: recado.reactions, myReaction: recado.myReaction, onTap: onReact)
 
-            if let reactionErrorMessage {
-                Text(reactionErrorMessage)
+            if let inlineErrorMessage {
+                Text(inlineErrorMessage)
                     .font(JKTypography.label)
                     .foregroundStyle(JKColor.jkDestructive)
             }
@@ -175,10 +211,13 @@ struct RecadoCard: View {
 
             Spacer()
 
-            // D-03: o menu de editar/apagar existe SÓ quando `isMine` é verdadeiro — sinal
-            // que o servidor já calculou comparando `author_id` com o `sub` do JWT, nunca
-            // uma comparação de nome/posição feita aqui.
-            if recado.isMine {
+            // D-14 amplia a condição de D-03: o menu renderiza quando há ALGUM item para
+            // mostrar — o recado é meu (Editar/Apagar) ou algum dos dois sinais de
+            // permissão do DTO está verdadeiro (fixar/arquivar). Todos os três sinais são
+            // calculados no servidor; nenhuma comparação de papel de membro existe neste
+            // arquivo, por desenho (zero-trust) — esconder itens é conveniência, a defesa
+            // real é a checagem do handler a cada requisição.
+            if recado.isMine || recado.canPin || recado.canArchive {
                 overflowMenu
             }
         }
@@ -186,15 +225,48 @@ struct RecadoCard: View {
 
     private var overflowMenu: some View {
         Menu {
-            Button {
-                onEdit(recado)
-            } label: {
-                Label(JKCopy.muralRecadoEditAction, systemImage: "pencil")
+            // D-03 intacto: Editar continua condicionado à autoria — a ampliação de
+            // D-14/D-15 dá ao admin curadoria (fixar/arquivar), nunca edição.
+            if recado.isMine {
+                Button {
+                    onEdit(recado)
+                } label: {
+                    Label(JKCopy.muralRecadoEditAction, systemImage: "pencil")
+                }
             }
-            Button(role: .destructive) {
-                isDeleteConfirmationPresented = true
-            } label: {
-                Label(JKCopy.muralRecadoDeleteAction, systemImage: "trash")
+            // D-14: item de fixar/desafixar quando o sinal do servidor permite, alternando
+            // cópia e glifo conforme o recado já esteja fixado.
+            if recado.canPin {
+                if recado.pinnedAt == nil {
+                    Button {
+                        onPin(recado)
+                    } label: {
+                        Label(JKCopy.muralRecadoPinAction, systemImage: "pin")
+                    }
+                } else {
+                    Button {
+                        onUnpin(recado)
+                    } label: {
+                        Label(JKCopy.muralRecadoUnpinAction, systemImage: "pin.slash")
+                    }
+                }
+            }
+            // D-15: arquivar abre o diálogo de confirmação em vez de agir na hora — o
+            // diálogo é a rede de segurança de uma ação que só o admin desfaz.
+            if recado.canArchive {
+                Button {
+                    isArchiveConfirmationPresented = true
+                } label: {
+                    Label(JKCopy.muralRecadoArchiveAction, systemImage: "archivebox")
+                }
+            }
+            // D-03 intacto: Apagar continua só do autor, e o item destrutivo é o último.
+            if recado.isMine {
+                Button(role: .destructive) {
+                    isDeleteConfirmationPresented = true
+                } label: {
+                    Label(JKCopy.muralRecadoDeleteAction, systemImage: "trash")
+                }
             }
         } label: {
             Image(systemName: "ellipsis")

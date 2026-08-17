@@ -31,6 +31,15 @@ private actor MuralFeedStubTransport: APIClientTransport {
         case failure(status: Int)
     }
 
+    /// Resultado simulado das quatro rotas de mutação de fixar/arquivar (plano 02-12
+    /// Task 2) — `PUT/DELETE .../pin` e `PUT/DELETE .../archive`, distinguidas por método
+    /// HTTP como já se faz com reação. Padrão de falha 500: um teste que não programa a
+    /// rota e mesmo assim a chama deve falhar alto, não passar por acidente.
+    enum MutationOutcome {
+        case success(RecadoDTO)
+        case failure(status: Int)
+    }
+
     /// Página devolvida quando `cursor` é `nil` (primeira carga/`reloadFromTop`).
     private var firstPageOutcome: Outcome
     /// Páginas devolvidas por cursor explícito (`loadNextPage`), chave = valor do cursor.
@@ -38,10 +47,18 @@ private actor MuralFeedStubTransport: APIClientTransport {
     private var photoURLsOutcome: PhotoURLsOutcome = .success(PhotoDownloadURLsResponse(recados: []))
     private var setReactionOutcome: SetReactionOutcome = .success(RecadoReactionSummaryDTO(reactions: [], myReaction: nil))
     private var clearReactionOutcome: ClearReactionOutcome = .success
+    private var pinOutcome: MutationOutcome = .failure(status: 500)
+    private var unpinOutcome: MutationOutcome = .failure(status: 500)
+    private var archiveOutcome: MutationOutcome = .failure(status: 500)
+    private var unarchiveOutcome: MutationOutcome = .failure(status: 500)
     private(set) var callCount = 0
     private(set) var photoURLsCallCount = 0
     private(set) var setReactionCallCount = 0
     private(set) var clearReactionCallCount = 0
+    private(set) var pinCallCount = 0
+    private(set) var unpinCallCount = 0
+    private(set) var archiveCallCount = 0
+    private(set) var unarchiveCallCount = 0
     /// Um elemento por chamada a `photos/urls`, na ordem em que ocorreram — os
     /// `recadoIDs` que o corpo daquela chamada pediu.
     private(set) var photoURLsRequestedIDs: [[UUID]] = []
@@ -73,6 +90,22 @@ private actor MuralFeedStubTransport: APIClientTransport {
         clearReactionOutcome = outcome
     }
 
+    func setPinOutcome(_ outcome: MutationOutcome) {
+        pinOutcome = outcome
+    }
+
+    func setUnpinOutcome(_ outcome: MutationOutcome) {
+        unpinOutcome = outcome
+    }
+
+    func setArchiveOutcome(_ outcome: MutationOutcome) {
+        archiveOutcome = outcome
+    }
+
+    func setUnarchiveOutcome(_ outcome: MutationOutcome) {
+        unarchiveOutcome = outcome
+    }
+
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let url = request.url!
         if url.path.hasSuffix("/photos/urls") {
@@ -81,11 +114,37 @@ private actor MuralFeedStubTransport: APIClientTransport {
         if url.path.hasSuffix("/reactions") {
             return try encodeReaction(request: request, url: url)
         }
+        if url.path.hasSuffix("/pin") {
+            if request.httpMethod == "PUT" {
+                pinCallCount += 1
+                return try Self.encodeMutation(pinOutcome, url: url)
+            }
+            unpinCallCount += 1
+            return try Self.encodeMutation(unpinOutcome, url: url)
+        }
+        if url.path.hasSuffix("/archive") {
+            if request.httpMethod == "PUT" {
+                archiveCallCount += 1
+                return try Self.encodeMutation(archiveOutcome, url: url)
+            }
+            unarchiveCallCount += 1
+            return try Self.encodeMutation(unarchiveOutcome, url: url)
+        }
 
         callCount += 1
         let cursor = Self.cursor(from: url)
         let outcome = cursor.flatMap { cursoredOutcomes[$0] } ?? firstPageOutcome
         return try Self.encode(outcome, url: url)
+    }
+
+    private static func encodeMutation(_ outcome: MutationOutcome, url: URL) throws -> (Data, HTTPURLResponse) {
+        switch outcome {
+        case .success(let dto):
+            let data = try ServerWire.encoder.encode(dto)
+            return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        case .failure(let status):
+            return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
+        }
     }
 
     private func encodeReaction(request: URLRequest, url: URL) throws -> (Data, HTTPURLResponse) {
@@ -270,12 +329,63 @@ private actor MuralFeedReactionGatedTransport: APIClientTransport {
     }
 }
 
+/// Transporte que responde `PUT .../archive` na hora, mas bloqueia a recarga do feed (a
+/// segunda chamada sem cursor) até `release()` — usado só pelo caso que prova que a remoção
+/// local do cartão acontece ANTES da resposta da recarga chegar (a animação de remoção deve
+/// acontecer no momento do toque, plano 02-12 Task 2).
+private actor MuralFeedArchiveGatedTransport: APIClientTransport {
+    private let firstPage: RecadoFeedPage
+    private let reloadPage: RecadoFeedPage
+    private let archiveResponse: RecadoDTO
+    private var feedCallCount = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    private(set) var isReloadWaiting = false
+
+    init(firstPage: RecadoFeedPage, reloadPage: RecadoFeedPage, archiveResponse: RecadoDTO) {
+        self.firstPage = firstPage
+        self.reloadPage = reloadPage
+        self.archiveResponse = archiveResponse
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let url = request.url!
+        if url.path.hasSuffix("/archive") {
+            let data = try ServerWire.encoder.encode(archiveResponse)
+            return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        feedCallCount += 1
+        if feedCallCount == 1 {
+            let data = try ServerWire.encoder.encode(firstPage)
+            return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        isReloadWaiting = true
+        await waitUntilReleased()
+        let data = try ServerWire.encoder.encode(reloadPage)
+        return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+
+    private func waitUntilReleased() async {
+        if released { return }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+}
+
 @MainActor
 final class MuralFeedViewModelTests: XCTestCase {
     private func url() -> URL { URL(string: "http://test.local")! }
 
     private func makeRecado(
-        id: UUID = UUID(), sequence: Int64, text: String = "Oi", photos: [RecadoPhotoRefDTO] = []
+        id: UUID = UUID(), sequence: Int64, text: String = "Oi", photos: [RecadoPhotoRefDTO] = [],
+        pinnedAt: Date? = nil, canPin: Bool = false, canArchive: Bool = false
     ) -> RecadoDTO {
         RecadoDTO(
             id: id,
@@ -291,7 +401,10 @@ final class MuralFeedViewModelTests: XCTestCase {
             reactions: [],
             myReaction: nil,
             commentCount: 0,
-            latestComments: []
+            latestComments: [],
+            pinnedAt: pinnedAt,
+            canPin: canPin,
+            canArchive: canArchive
         )
     }
 
@@ -789,5 +902,302 @@ final class MuralFeedViewModelTests: XCTestCase {
         }
         XCTAssertEqual(item.reactions, [ReactionCountDTO(kind: .laugh, count: 1)])
         XCTAssertEqual(item.myReaction, .laugh)
+    }
+
+    // MARK: Bloco de fixados (D-14, plano 02-12 Task 2)
+
+    private func makePinnedRecado(
+        sequence: Int64, pinnedAt: Date = Date(), photos: [RecadoPhotoRefDTO] = []
+    ) -> RecadoDTO {
+        makeRecado(sequence: sequence, photos: photos, pinnedAt: pinnedAt, canPin: true, canArchive: true)
+    }
+
+    func testLoadFirstPageFillsPinnedBlockAndStreamSeparately() async {
+        let pinned = makePinnedRecado(sequence: 5)
+        let streamItems = [makeRecado(sequence: 3), makeRecado(sequence: 2)]
+        let page = RecadoFeedPage(items: streamItems, nextCursor: nil, pinned: [pinned])
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        await sut.load()
+
+        XCTAssertEqual(sut.pinnedItems.map(\.id), [pinned.id], "o bloco vem do campo pinned da página")
+        XCTAssertEqual(sut.items.map(\.id), streamItems.map(\.id), "o fluxo fica só com o restante")
+    }
+
+    func testLoadNextPageDoesNotOverwritePinnedBlockWithEmptyLaterPageBlock() async {
+        let pinned = makePinnedRecado(sequence: 9)
+        let firstPage = RecadoFeedPage(items: [makeRecado(sequence: 2)], nextCursor: 1, pinned: [pinned])
+        // Páginas seguintes vêm com bloco vazio por contrato do servidor (plano 02-11).
+        let secondPage = RecadoFeedPage(items: [makeRecado(sequence: 1)], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage), cursoredPages: [1: .page(secondPage)])
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.loadNextPage()
+
+        XCTAssertEqual(sut.pinnedItems.map(\.id), [pinned.id], "a página seguinte nunca apaga o bloco no meio da rolagem")
+    }
+
+    func testReloadFromTopDiscardsAndRepopulatesPinnedBlock() async {
+        let pinnedA = makePinnedRecado(sequence: 9)
+        let firstPage = RecadoFeedPage(items: [makeRecado(sequence: 2)], nextCursor: nil, pinned: [pinnedA])
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+        XCTAssertEqual(sut.pinnedItems.map(\.id), [pinnedA.id])
+
+        let pinnedB = makePinnedRecado(sequence: 8)
+        await transport.setFirstPage(.page(RecadoFeedPage(items: [], nextCursor: nil, pinned: [pinnedB])))
+        await sut.reloadFromTop()
+
+        XCTAssertEqual(sut.pinnedItems.map(\.id), [pinnedB.id], "recarregar do topo descarta e repopula o bloco")
+    }
+
+    func testLoadWithNoPinnedInResponseLeavesPinnedItemsEmpty() async {
+        let page = RecadoFeedPage(items: [makeRecado(sequence: 1)], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        await sut.load()
+
+        XCTAssertTrue(sut.pinnedItems.isEmpty, "sem fixado na resposta, bloco vazio — nenhum enfeite")
+    }
+
+    func testFirstPagePhotoURLsBatchIncludesPinnedBlockRecadosInSingleCall() async {
+        let pinnedWithPhoto = makePinnedRecado(sequence: 9, photos: [RecadoPhotoRefDTO(id: UUID(), position: 0)])
+        let streamWithPhoto = makeRecado(sequence: 2, photos: [RecadoPhotoRefDTO(id: UUID(), position: 0)])
+        let page = RecadoFeedPage(items: [streamWithPhoto, makeRecado(sequence: 1)], nextCursor: nil, pinned: [pinnedWithPhoto])
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        await sut.load()
+
+        let photoURLsCallCount = await transport.photoURLsCallCount
+        XCTAssertEqual(photoURLsCallCount, 1, "continua sendo UMA chamada em lote, com a união das duas listas")
+        let requestedIDs = await transport.photoURLsRequestedIDs.last
+        XCTAssertEqual(
+            Set(requestedIDs ?? []), Set([streamWithPhoto.id, pinnedWithPhoto.id]),
+            "sem a união, cartão fixado com foto renderiza carrossel vazio"
+        )
+    }
+
+    /// A regressão mais provável desta onda: o recado fixado não está em `items`, e uma
+    /// busca que olha só a lista paginada tornaria o toque de reação num cartão do bloco um
+    /// não-op silencioso.
+    func testToggleReactionOnRecadoInPinnedBlockUpdatesThatRecadoNotSilentlyIgnored() async {
+        let pinned = makePinnedRecado(sequence: 9)
+        let page = RecadoFeedPage(items: [makeRecado(sequence: 1)], nextCursor: nil, pinned: [pinned])
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let serverSummary = RecadoReactionSummaryDTO(reactions: [ReactionCountDTO(kind: .love, count: 1)], myReaction: .love)
+        await transport.setSetReactionOutcome(.success(serverSummary))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.toggleReaction(recadoID: pinned.id, kind: .love)
+
+        let setReactionCallCount = await transport.setReactionCallCount
+        XCTAssertEqual(setReactionCallCount, 1, "o toque no cartão fixado chama a rede — não é ignorado")
+        XCTAssertEqual(sut.pinnedItems.first?.myReaction, .love, "o recado DO BLOCO foi atualizado")
+        XCTAssertEqual(sut.pinnedItems.first?.reactions, serverSummary.reactions)
+    }
+
+    func testToggleReactionFailureOnPinnedBlockRecadoRestoresThatRecadoSummaryInBlock() async {
+        var pinned = makePinnedRecado(sequence: 9)
+        pinned.reactions = [ReactionCountDTO(kind: .love, count: 1)]
+        pinned.myReaction = .love
+        let page = RecadoFeedPage(items: [makeRecado(sequence: 1)], nextCursor: nil, pinned: [pinned])
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        await transport.setSetReactionOutcome(.failure(status: 500))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.toggleReaction(recadoID: pinned.id, kind: .laugh)
+
+        XCTAssertEqual(sut.pinnedItems.first?.myReaction, .love, "falha reverte o resumo daquele recado no bloco")
+        XCTAssertEqual(sut.pinnedItems.first?.reactions, [ReactionCountDTO(kind: .love, count: 1)])
+        XCTAssertEqual(sut.actionErrorMessage, JKCopy.muralReactionErrorMessage)
+        XCTAssertEqual(sut.actionErrorRecadoID, pinned.id)
+    }
+
+    // MARK: pin/unpin/archive (D-14/D-15, plano 02-12 Task 2)
+
+    func testPinSuccessReloadsFromTop() async {
+        let recado = makeRecado(sequence: 2, canPin: true)
+        let firstPage = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        var pinnedVersion = recado
+        pinnedVersion.pinnedAt = Date()
+        await transport.setPinOutcome(.success(pinnedVersion))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        // A recarga pós-fixar deve buscar a primeira página de novo — programa a resposta
+        // nova ANTES da ação, com o recado já dentro do bloco.
+        await transport.setFirstPage(.page(RecadoFeedPage(items: [], nextCursor: nil, pinned: [pinnedVersion])))
+        await sut.pin(recadoID: recado.id)
+
+        let feedCallCount = await transport.callCount
+        XCTAssertEqual(feedCallCount, 2, "fixar com sucesso recarrega do topo")
+        XCTAssertEqual(sut.pinnedItems.map(\.id), [recado.id], "o cartão visivelmente entrou no bloco")
+        XCTAssertTrue(sut.items.isEmpty)
+        XCTAssertNil(sut.actionErrorMessage)
+    }
+
+    func testPinFailureSetsSharedActionErrorPointingAtRecadoWithoutReloadingOrEmptying() async {
+        let recado = makeRecado(sequence: 2, canPin: true)
+        let firstPage = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        await transport.setPinOutcome(.failure(status: 403))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.pin(recadoID: recado.id)
+
+        XCTAssertEqual(sut.actionErrorMessage, JKCopy.muralMenuActionErrorMessage)
+        XCTAssertEqual(sut.actionErrorRecadoID, recado.id, "a mensagem aponta o recado afetado")
+        let feedCallCount = await transport.callCount
+        XCTAssertEqual(feedCallCount, 1, "falha não recarrega")
+        XCTAssertEqual(sut.items.map(\.id), [recado.id], "falha não esvazia a lista")
+    }
+
+    func testUnpinSuccessReloadsFromTop() async {
+        let pinned = makePinnedRecado(sequence: 9)
+        let firstPage = RecadoFeedPage(items: [], nextCursor: nil, pinned: [pinned])
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        var unpinnedVersion = pinned
+        unpinnedVersion.pinnedAt = nil
+        await transport.setUnpinOutcome(.success(unpinnedVersion))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await transport.setFirstPage(.page(RecadoFeedPage(items: [unpinnedVersion], nextCursor: nil)))
+        await sut.unpin(recadoID: pinned.id)
+
+        let feedCallCount = await transport.callCount
+        XCTAssertEqual(feedCallCount, 2, "desafixar com sucesso recarrega do topo")
+        XCTAssertTrue(sut.pinnedItems.isEmpty, "o cartão visivelmente saiu do bloco")
+        XCTAssertEqual(sut.items.map(\.id), [pinned.id], "e voltou ao fluxo")
+    }
+
+    func testUnpinFailureSetsSharedActionErrorWithoutReloading() async {
+        let pinned = makePinnedRecado(sequence: 9)
+        let firstPage = RecadoFeedPage(items: [], nextCursor: nil, pinned: [pinned])
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        await transport.setUnpinOutcome(.failure(status: 500))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.unpin(recadoID: pinned.id)
+
+        XCTAssertEqual(sut.actionErrorMessage, JKCopy.muralMenuActionErrorMessage)
+        XCTAssertEqual(sut.actionErrorRecadoID, pinned.id)
+        let feedCallCount = await transport.callCount
+        XCTAssertEqual(feedCallCount, 1, "falha não recarrega")
+        XCTAssertEqual(sut.pinnedItems.map(\.id), [pinned.id], "o bloco fica exatamente como estava")
+    }
+
+    func testArchiveSuccessRemovesRecadoFromStreamThenReloadsFromTop() async {
+        let recado = makeRecado(sequence: 2, canArchive: true)
+        let other = makeRecado(sequence: 1)
+        let firstPage = RecadoFeedPage(items: [recado, other], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        await transport.setArchiveOutcome(.success(recado))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await transport.setFirstPage(.page(RecadoFeedPage(items: [other], nextCursor: nil)))
+        await sut.archive(recadoID: recado.id)
+
+        let feedCallCount = await transport.callCount
+        XCTAssertEqual(feedCallCount, 2, "arquivar com sucesso recarrega do topo depois da remoção local")
+        XCTAssertEqual(sut.items.map(\.id), [other.id], "o recado arquivado saiu do fluxo")
+        XCTAssertNil(sut.actionErrorMessage)
+    }
+
+    func testArchiveSuccessRemovesRecadoFromPinnedBlock() async {
+        let pinned = makePinnedRecado(sequence: 9)
+        let firstPage = RecadoFeedPage(items: [makeRecado(sequence: 1)], nextCursor: nil, pinned: [pinned])
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        await transport.setArchiveOutcome(.success(pinned))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await transport.setFirstPage(.page(RecadoFeedPage(items: [makeRecado(sequence: 1)], nextCursor: nil)))
+        await sut.archive(recadoID: pinned.id)
+
+        XCTAssertTrue(sut.pinnedItems.isEmpty, "arquivar remove o recado da lista em que ele estava — o bloco")
+        let feedCallCount = await transport.callCount
+        XCTAssertEqual(feedCallCount, 2)
+    }
+
+    func testArchiveSuccessRemovesCardLocallyBeforeReloadResolves() async {
+        let recado = makeRecado(sequence: 2, canArchive: true)
+        let other = makeRecado(sequence: 1)
+        let firstPage = RecadoFeedPage(items: [recado, other], nextCursor: nil)
+        let reloadPage = RecadoFeedPage(items: [other], nextCursor: nil)
+        let gated = MuralFeedArchiveGatedTransport(firstPage: firstPage, reloadPage: reloadPage, archiveResponse: recado)
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: gated, baseURL: url()))
+        await sut.load()
+
+        let task = Task { await sut.archive(recadoID: recado.id) }
+        var attempts = 0
+        while await !gated.isReloadWaiting, attempts < 10_000 {
+            await Task.yield()
+            attempts += 1
+        }
+        guard await gated.isReloadWaiting else {
+            await gated.release()
+            await task.value
+            return XCTFail("a recarga nunca ficou em voo — archive não recarregou como esperado")
+        }
+
+        // Com a recarga ainda em voo, a remoção local já aconteceu — é o que dá a animação
+        // no momento do toque, e não só quando a resposta chegar.
+        XCTAssertEqual(sut.items.map(\.id), [other.id], "remoção local antes da recarga resolver")
+
+        await gated.release()
+        await task.value
+        XCTAssertEqual(sut.items.map(\.id), [other.id])
+    }
+
+    func testArchiveFailureRemovesNothingFromEitherListAndSetsSharedError() async {
+        let pinned = makePinnedRecado(sequence: 9)
+        let recado = makeRecado(sequence: 2, canArchive: true)
+        let firstPage = RecadoFeedPage(items: [recado], nextCursor: nil, pinned: [pinned])
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        await transport.setArchiveOutcome(.failure(status: 500))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.archive(recadoID: recado.id)
+
+        XCTAssertEqual(sut.items.map(\.id), [recado.id], "falha não remove nada do fluxo")
+        XCTAssertEqual(sut.pinnedItems.map(\.id), [pinned.id], "falha não remove nada do bloco")
+        XCTAssertEqual(sut.actionErrorMessage, JKCopy.muralMenuActionErrorMessage)
+        XCTAssertEqual(sut.actionErrorRecadoID, recado.id)
+        let feedCallCount = await transport.callCount
+        XCTAssertEqual(feedCallCount, 1, "falha não recarrega")
+    }
+
+    func testConcurrentArchiveCallsOnSameRecadoLeaveStateConsistentWithLastServerResponse() async {
+        let recado = makeRecado(sequence: 2, canArchive: true)
+        let other = makeRecado(sequence: 1)
+        let firstPage = RecadoFeedPage(items: [recado, other], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        await transport.setArchiveOutcome(.success(recado))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+        await transport.setFirstPage(.page(RecadoFeedPage(items: [other], nextCursor: nil)))
+
+        async let first: Void = sut.archive(recadoID: recado.id)
+        async let second: Void = sut.archive(recadoID: recado.id)
+        _ = await (first, second)
+
+        // Duas chamadas concorrentes: a segunda remoção local encontra o recado já ausente
+        // (localizador devolve nil) e não corrompe índice nenhum; o estado final é o da
+        // última resposta do servidor.
+        XCTAssertEqual(sut.items.map(\.id), [other.id], "estado final consistente com a última resposta do servidor")
+        XCTAssertEqual(Set(sut.items.map(\.id)).count, sut.items.count, "nenhuma remoção de índice errado")
     }
 }
