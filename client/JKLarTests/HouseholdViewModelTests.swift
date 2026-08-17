@@ -77,7 +77,7 @@ final class HouseholdViewModelTests: XCTestCase {
     private func url() -> URL { URL(string: "http://test.local")! }
 
     private func makeMember(name: String, role: MemberRole, isSelf: Bool) -> MemberDTO {
-        MemberDTO(id: UUID(), displayName: name, role: role, joinedAt: Date(), isSelf: isSelf)
+        MemberDTO(id: UUID(), userID: UUID(), displayName: name, role: role, joinedAt: Date(), isSelf: isSelf)
     }
 
     // MARK: canRemove(_:)
