@@ -40,6 +40,11 @@ struct RecadoController: RouteCollection {
         scoped.get(use: feed)
         scoped.patch(":recadoID", use: update)
         scoped.delete(":recadoID", use: destroy)
+        // PUT, não POST (a 02-RESEARCH.md diagramou POST): a operação é a substituição
+        // idempotente da única reação do requisitante (D-07b) — idempotência importa porque
+        // o cliente aplica um toggle otimista que pode reenviar.
+        scoped.put(":recadoID", "reactions", use: setReaction)
+        scoped.delete(":recadoID", "reactions", use: clearReaction)
     }
 
     // MARK: POST /api/v1/recados
@@ -111,7 +116,7 @@ struct RecadoController: RouteCollection {
             isComment: false
         )
 
-        let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB)
+        let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB, logger: req.logger)
         return try Self.jsonResponse(dto, status: .created)
     }
 
@@ -149,7 +154,7 @@ struct RecadoController: RouteCollection {
         var dtos: [RecadoDTO] = []
         dtos.reserveCapacity(items.count)
         for recado in items {
-            dtos.append(try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB))
+            dtos.append(try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB, logger: req.logger))
         }
 
         let nextCursor = hasMore ? items.last?.sequence : nil
@@ -177,12 +182,7 @@ struct RecadoController: RouteCollection {
         // RLS já escopou a consulta na casa do requisitante — um recado de outra casa cai
         // aqui como inexistente, não como proibido (404, nunca 403; a rota não pode
         // confirmar a existência de uma linha alheia).
-        guard let recado = try await Recado.query(on: req.scopedDB)
-            .filter(\.$id == recadoID)
-            .first()
-        else {
-            throw Abort(.notFound)
-        }
+        let recado = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
 
         // D-03: só o autor edita, sem exceção de moderação para admin.
         guard recado.$author.id == userID else {
@@ -252,7 +252,7 @@ struct RecadoController: RouteCollection {
             isComment: false
         )
 
-        let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB)
+        let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB, logger: req.logger)
         return try Self.jsonResponse(dto, status: .ok)
     }
 
@@ -273,12 +273,7 @@ struct RecadoController: RouteCollection {
             return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
         }
 
-        guard let recado = try await Recado.query(on: req.scopedDB)
-            .filter(\.$id == recadoID)
-            .first()
-        else {
-            throw Abort(.notFound)
-        }
+        let recado = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
 
         guard recado.$author.id == userID else {
             return try Self.errorResponse(
@@ -336,6 +331,87 @@ struct RecadoController: RouteCollection {
         return Response(status: .noContent)
     }
 
+    // MARK: PUT /api/v1/recados/:recadoID/reactions
+
+    @Sendable
+    func setReaction(req: Request) async throws -> Response {
+        guard req.householdContext != nil else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        let recado = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
+
+        // A decodificação é a validação — um `kind` fora do enum fechado nunca chega aqui,
+        // já falhou em `req.content.decode` com 400 (D-07, 02-RESEARCH.md Pitfall 4). Nunca
+        // ler o campo como texto solto.
+        let body = try req.content.decode(SetReactionRequest.self)
+
+        // Consulta, então atualiza ou insere (padrão de `DeviceController.register`, não
+        // "insere e captura colisão de constraint" — aqui não há valor gerado aleatoriamente
+        // que justifique retentativa). O filtro por `user_id` do JWT é o que impede alguém
+        // tocar a linha de outra pessoa; encontrar a própria linha e trocar `kind` é a
+        // substituição de D-07b, nunca uma segunda linha acumulada.
+        if let existing = try await RecadoReaction.query(on: req.scopedDB)
+            .filter(\.$recado.$id == recadoID)
+            .filter(\.$user.$id == userID)
+            .first()
+        {
+            existing.kind = body.kind.rawValue
+            try await existing.save(on: req.scopedDB)
+        } else {
+            let reaction = RecadoReaction(
+                householdID: recado.$household.id,
+                recadoID: recadoID,
+                userID: userID,
+                kind: body.kind.rawValue
+            )
+            try await reaction.save(on: req.scopedDB)
+        }
+
+        let summary = try await Self.reactionSummary(
+            for: recadoID, requesterID: userID, on: req.scopedDB, logger: req.logger
+        )
+        return try Self.jsonResponse(summary, status: .ok)
+    }
+
+    // MARK: DELETE /api/v1/recados/:recadoID/reactions
+
+    @Sendable
+    func clearReaction(req: Request) async throws -> Response {
+        guard req.householdContext != nil else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        _ = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
+
+        // Idempotente por construção: filtrar por (recadoID, userID) e apagar o que existir
+        // — nenhuma linha encontrada não é um erro, é o estado final desejado (204 igual).
+        try await RecadoReaction.query(on: req.scopedDB)
+            .filter(\.$recado.$id == recadoID)
+            .filter(\.$user.$id == userID)
+            .delete()
+
+        return Response(status: .noContent)
+    }
+
     // MARK: Mapeamento Recado → RecadoDTO
 
     /// Preenche todos os campos consultando de verdade `recado_photos`, `recado_mentions`,
@@ -346,7 +422,8 @@ struct RecadoController: RouteCollection {
     private static func buildDTO(
         recado: Recado,
         requesterID: UUID,
-        on database: any Database
+        on database: any Database,
+        logger: Logger
     ) async throws -> RecadoDTO {
         let recadoID = try recado.requireID()
 
@@ -368,23 +445,12 @@ struct RecadoController: RouteCollection {
             MentionDTO(userID: $0.$mentionedUser.id, displayName: $0.mentionedUser.displayName)
         }
 
-        let reactionRows = try await RecadoReaction.query(on: database)
-            .filter(\.$recado.$id == recadoID)
-            .all()
-        var reactionCounts: [String: Int] = [:]
-        var myReactionKind: ReactionKind?
-        for reaction in reactionRows {
-            reactionCounts[reaction.kind, default: 0] += 1
-            if reaction.$user.id == requesterID {
-                myReactionKind = ReactionKind(rawValue: reaction.kind)
-            }
-        }
-        let reactions = reactionCounts
-            .compactMap { key, count -> ReactionCountDTO? in
-                guard let kind = ReactionKind(rawValue: key) else { return nil }
-                return ReactionCountDTO(kind: kind, count: count)
-            }
-            .sorted { $0.kind.rawValue < $1.kind.rawValue }
+        // Mesmo helper que `setReaction`/`clearReaction` usam para a própria resposta — feed
+        // e resposta de reação nunca podem divergir sobre a contagem ou a reação do próprio
+        // requisitante.
+        let reactionSummary = try await Self.reactionSummary(
+            for: recadoID, requesterID: requesterID, on: database, logger: logger
+        )
 
         let commentCount = try await RecadoComment.query(on: database)
             .filter(\.$recado.$id == recadoID)
@@ -429,11 +495,69 @@ struct RecadoController: RouteCollection {
             updatedAt: recado.updatedAt ?? Date(),
             photos: photos,
             mentions: mentions,
-            reactions: reactions,
-            myReaction: myReactionKind,
+            reactions: reactionSummary.reactions,
+            myReaction: reactionSummary.myReaction,
             commentCount: commentCount,
             latestComments: latestComments
         )
+    }
+
+    // MARK: Reações (D-07, D-07b)
+
+    /// Carrega as linhas de `recado_reactions` daquele recado, agrupa por `kind` na ordem de
+    /// declaração de `ReactionKind.allCases` (para a barra de reações do cliente não mudar de
+    /// ordem entre requisições) e resolve `myReaction` pela linha do requisitante. Usado por
+    /// `setReaction`/`clearReaction` (resposta direta) e por `buildDTO` (feed) — os dois
+    /// caminhos nunca podem divergir sobre a contagem.
+    private static func reactionSummary(
+        for recadoID: UUID,
+        requesterID: UUID,
+        on database: any Database,
+        logger: Logger
+    ) async throws -> RecadoReactionSummaryDTO {
+        let reactionRows = try await RecadoReaction.query(on: database)
+            .filter(\.$recado.$id == recadoID)
+            .all()
+
+        var countsByKind: [ReactionKind: Int] = [:]
+        var myReactionKind: ReactionKind?
+        for reaction in reactionRows {
+            guard let kind = ReactionKind(rawValue: reaction.kind) else {
+                // Só alcançável por escrita direta no banco (a decodificação HTTP sempre
+                // valida contra o enum fechado) — a linha é ignorada na agregação, nunca
+                // derruba o feed inteiro.
+                logger.error("recado_reactions.kind fora do conjunto fechado: \(reaction.kind)")
+                continue
+            }
+            countsByKind[kind, default: 0] += 1
+            if reaction.$user.id == requesterID {
+                myReactionKind = kind
+            }
+        }
+
+        let reactions = ReactionKind.allCases.compactMap { kind -> ReactionCountDTO? in
+            guard let count = countsByKind[kind] else { return nil }
+            return ReactionCountDTO(kind: kind, count: count)
+        }
+
+        return RecadoReactionSummaryDTO(reactions: reactions, myReaction: myReactionKind)
+    }
+
+    // MARK: Recado por id (404, nunca 403, para casa alheia)
+
+    /// RLS já escopou a consulta na casa do requisitante — um recado de outra casa cai aqui
+    /// como inexistente, não como proibido (404, nunca 403; a rota não pode confirmar a
+    /// existência de uma linha alheia). Extraído de `update`/`destroy` (plano 02-01) para as
+    /// rotas de reação e comentário deste plano compartilharem exatamente o mesmo
+    /// comportamento.
+    private static func loadRecadoOrNotFound(_ recadoID: UUID, on db: any Database) async throws -> Recado {
+        guard let recado = try await Recado.query(on: db)
+            .filter(\.$id == recadoID)
+            .first()
+        else {
+            throw Abort(.notFound)
+        }
+        return recado
     }
 
     // MARK: Menções (plano 02-02, D-05/D-06)

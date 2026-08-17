@@ -224,3 +224,32 @@ public struct UpdateRecadoRequest: Codable, Sendable {
         self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
     }
 }
+
+/// Corpo de `PUT /api/v1/recados/:recadoID/reactions`.
+///
+/// `kind` é o enum fechado `ReactionKind` (D-07): um valor fora do conjunto falha na
+/// decodificação automaticamente (400), sem nenhuma comparação de string escrita à mão. O
+/// tipo deliberadamente não carrega `userId` nem `recadoId` — ambos resolvidos no servidor a
+/// partir do JWT verificado e do parâmetro de rota, mesmo motivo de
+/// `DeviceRegistrationRequest`.
+public struct SetReactionRequest: Codable, Sendable {
+    public var kind: ReactionKind
+
+    public init(kind: ReactionKind) {
+        self.kind = kind
+    }
+}
+
+/// Resposta de `PUT /api/v1/recados/:recadoID/reactions` — mesmo formato que
+/// `RecadoDTO.reactions`/`RecadoDTO.myReaction` usam, calculado pelo mesmo helper
+/// (`RecadoController.reactionSummary`) para o feed e a resposta de reação nunca divergirem.
+public struct RecadoReactionSummaryDTO: Codable, Sendable {
+    public var reactions: [ReactionCountDTO]
+    public var myReaction: ReactionKind?
+
+    public init(reactions: [ReactionCountDTO], myReaction: ReactionKind?) {
+        self.reactions = reactions
+        self.myReaction = myReaction
+    }
+}
+
