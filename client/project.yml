@@ -136,3 +136,7 @@ targets:
         # este override condicional por SDK o teste hosted falha ao localizar o TEST_HOST no
         # build de macOS ("Could not find test host for JKLarTests").
         TEST_HOST[sdk=macosx*]: "$(BUILT_PRODUCTS_DIR)/JKLar.app/Contents/MacOS/JKLar"
+        # O bundle de testes não tem um `info:` próprio (só o app tem) — sem gerar um
+        # Info.plist automático, o codesign do bundle falha ("Cannot code sign because the
+        # target does not have an Info.plist file").
+        GENERATE_INFOPLIST_FILE: YES

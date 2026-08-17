@@ -16,6 +16,10 @@ struct LoginView: View {
     @Environment(SessionStore.self) private var sessionStore
 
     @State private var viewModel = LoginViewModel()
+    // Fluxo Apple dirigido por `ASAuthorizationController` + delegate, não pelo
+    // `SignInWithAppleButton` da SwiftUI — o `onCompletion` do wrapper nunca dispara no iOS
+    // Simulator mesmo com autorização concluída (ver doc de `AppleSignInCoordinator`).
+    @State private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
         VStack(spacing: JKSpacing.xl) {
@@ -64,6 +68,11 @@ struct LoginView: View {
     /// mesmo espaço/frame — a estrutura da tela não pode saltar durante o login
     /// (01-UI-SPEC.md "loading | login-buttons"). Os outros dois botões desabilitam, nunca
     /// escondem, via `.disabled(viewModel.isDisabled(.apple))`.
+    ///
+    /// Botão custom no visual das Apple HIG (fundo preto/branco por esquema, logo +
+    /// "Continuar com a Apple"), não o `SignInWithAppleButton` — além do bug de callback do
+    /// wrapper (doc de `AppleSignInCoordinator`), o nativo renderizava rótulo em inglês,
+    /// inconsistente com os irmãos Google/Microsoft em português.
     @ViewBuilder
     private var appleRow: some View {
         if viewModel.isInProgress(.apple) {
@@ -71,22 +80,27 @@ struct LoginView: View {
                 .frame(maxWidth: .infinity, minHeight: JKLayout.minTapTarget)
                 .background(colorScheme == .dark ? Color.white : Color.black, in: JKLayout.controlShape)
         } else {
-            SignInWithAppleButton(.continue) { request in
-                AppleSignInService.configure(request)
-                // Roda de forma síncrona no toque, antes do fluxo nativo abrir — é o que
-                // permite os outros dois botões desabilitarem já durante o prompt da Apple.
+            Button {
+                // Mesma ordem do fluxo antigo: `beginApple()` roda no toque, antes de o
+                // prompt nativo abrir — é o que desabilita os outros dois botões já durante
+                // o prompt da Apple.
                 viewModel.beginApple()
-            } onCompletion: { result in
                 Task {
+                    let result = await appleCoordinator.signIn()
                     await viewModel.handleAppleCompletion(
                         AppleSignInService.result(from: result),
                         exchange: exchange(provider: .apple)
                     )
                 }
+            } label: {
+                Label(JKCopy.loginContinueWithApple, systemImage: "apple.logo")
+                    .font(JKTypography.body)
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity, minHeight: JKLayout.minTapTarget)
             }
-            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-            .frame(maxWidth: .infinity, minHeight: JKLayout.minTapTarget)
-            .cornerRadius(JKLayout.controlCornerRadius)
+            .buttonStyle(.plain)
+            .foregroundStyle(colorScheme == .dark ? Color.black : Color.white)
+            .background(colorScheme == .dark ? Color.white : Color.black, in: JKLayout.controlShape)
             .disabled(viewModel.isDisabled(.apple))
         }
     }

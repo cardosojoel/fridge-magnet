@@ -91,6 +91,11 @@ enum JKCopy {
     static let loginTagline = "A casa toda em um só lugar."
     static let loginErrorMessage = "Não foi possível entrar. Verifique sua conexão e tente novamente."
     static let loginErrorRetry = "Tentar de novo"
+    /// Primeiro botão (D-01, Apple sempre primeiro — App Store Guideline 4.8). O
+    /// `SignInWithAppleButton` nativo renderizava o rótulo em inglês ("Continue with Apple"),
+    /// inconsistente com os outros dois botões em português; o botão custom que o substituiu
+    /// (ver `LoginView.appleRow`) usa esta cópia, no mesmo padrão dos irmãos.
+    static let loginContinueWithApple = "Continuar com a Apple"
     /// String exata do Copywriting Contract (01-UI-SPEC.md § Copywriting Contract, linha
     /// "Login — Google button") — segundo botão, na ordem Apple → Google → Microsoft (D-01).
     static let loginContinueWithGoogle = "Continuar com o Google"
