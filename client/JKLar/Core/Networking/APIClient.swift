@@ -488,8 +488,24 @@ actor APIClient {
         return request
     }
 
-    private static let encoder = JSONEncoder()
-    private static let decoder = JSONDecoder()
+    /// `.iso8601` nos dois sentidos porque é o formato de data do `ContentConfiguration`
+    /// padrão do Vapor 4 (`JSONEncoder.custom(dates: .iso8601)`) — com o default da
+    /// Foundation (segundos desde a data de referência, um número), qualquer DTO com um
+    /// campo `Date` (ex.: `MemberDTO.joinedAt`, `RecadoDTO.createdAt`) decodifica no teste
+    /// (fixtures codificadas por este mesmo encoder) mas falha contra o servidor real —
+    /// exatamente o furo que derrubou a lista de membros e o feed no primeiro login real
+    /// (2026-08-17).
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
 
     private static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         do {

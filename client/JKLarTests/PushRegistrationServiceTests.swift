@@ -38,12 +38,12 @@ actor PushTestTransport: APIClientTransport {
 
         if path.hasSuffix("auth/refresh") {
             acceptedAccessToken = refreshedAccessToken
-            return (try! JSONEncoder().encode(makeSession()), httpResponse(request.url!, 200))
+            return (try! ServerWire.encoder.encode(makeSession()), httpResponse(request.url!, 200))
         }
 
         if path.hasSuffix("auth/session") {
             acceptedAccessToken = refreshedAccessToken
-            return (try! JSONEncoder().encode(makeSession()), httpResponse(request.url!, 200))
+            return (try! ServerWire.encoder.encode(makeSession()), httpResponse(request.url!, 200))
         }
 
         if path.hasSuffix("api/v1/devices") {
@@ -66,7 +66,7 @@ actor PushTestTransport: APIClientTransport {
         let bearer = request.value(forHTTPHeaderField: "Authorization")
         if bearer == "Bearer \(acceptedAccessToken)" {
             let household = HouseholdDTO(id: UUID(), name: "Casa Teste", memberCount: 1, myRole: .admin)
-            return (try! JSONEncoder().encode(household), httpResponse(request.url!, 200))
+            return (try! ServerWire.encoder.encode(household), httpResponse(request.url!, 200))
         }
         return (Data(), httpResponse(request.url!, 401))
     }

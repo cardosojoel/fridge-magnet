@@ -70,10 +70,10 @@ private struct ComposeStubTransport: APIClientTransport {
 
         switch outcome {
         case .success(let recado, let status):
-            let data = try JSONEncoder().encode(recado)
+            let data = try ServerWire.encoder.encode(recado)
             return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
         case .apiError(let code, let status):
-            let data = try JSONEncoder().encode(APIErrorResponse(code: code, message: "erro de teste"))
+            let data = try ServerWire.encoder.encode(APIErrorResponse(code: code, message: "erro de teste"))
             return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
         case .failure(let status):
             return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
@@ -91,10 +91,10 @@ private struct ComposeStubTransport: APIClientTransport {
                     expiresAt: Date().addingTimeInterval(600)
                 )
             }
-            let data = try JSONEncoder().encode(PresignPhotoUploadResponse(uploads: uploads))
+            let data = try ServerWire.encoder.encode(PresignPhotoUploadResponse(uploads: uploads))
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         case .apiError(let code, let status):
-            let data = try JSONEncoder().encode(APIErrorResponse(code: code, message: "erro de teste"))
+            let data = try ServerWire.encoder.encode(APIErrorResponse(code: code, message: "erro de teste"))
             return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
         }
     }
@@ -104,10 +104,10 @@ private struct ComposeStubTransport: APIClientTransport {
         case .success:
             let body = try JSONDecoder().decode(ConfirmPhotoUploadRequest.self, from: request.httpBody ?? Data())
             let dtos = body.objectKeys.enumerated().map { index, _ in ConfirmedPhotoDTO(id: UUID(), position: index) }
-            let data = try JSONEncoder().encode(dtos)
+            let data = try ServerWire.encoder.encode(dtos)
             return (data, HTTPURLResponse(url: url, statusCode: 201, httpVersion: nil, headerFields: nil)!)
         case .apiError(let code, let status):
-            let data = try JSONEncoder().encode(APIErrorResponse(code: code, message: "erro de teste"))
+            let data = try ServerWire.encoder.encode(APIErrorResponse(code: code, message: "erro de teste"))
             return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
         }
     }
@@ -152,7 +152,7 @@ private actor ComposeGatedTransport: APIClientTransport {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         callCount += 1
         await waitUntilReleased()
-        let data = try JSONEncoder().encode(recado)
+        let data = try ServerWire.encoder.encode(recado)
         return (data, HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!)
     }
 

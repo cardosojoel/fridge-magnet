@@ -17,10 +17,10 @@ private struct JoinStubTransport: APIClientTransport {
         let url = request.url!
         switch outcome {
         case .success(let household):
-            let data = try JSONEncoder().encode(household)
+            let data = try ServerWire.encoder.encode(household)
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         case .apiError(let code, let status):
-            let data = try JSONEncoder().encode(APIErrorResponse(code: code, message: "erro de teste"))
+            let data = try ServerWire.encoder.encode(APIErrorResponse(code: code, message: "erro de teste"))
             return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
         }
     }
@@ -45,10 +45,10 @@ private actor JoinGatedTransport: APIClientTransport {
         let url = request.url!
         switch outcome {
         case .success(let household):
-            let data = try JSONEncoder().encode(household)
+            let data = try ServerWire.encoder.encode(household)
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         case .apiError(let code, let status):
-            let data = try JSONEncoder().encode(APIErrorResponse(code: code, message: "erro de teste"))
+            let data = try ServerWire.encoder.encode(APIErrorResponse(code: code, message: "erro de teste"))
             return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
         }
     }

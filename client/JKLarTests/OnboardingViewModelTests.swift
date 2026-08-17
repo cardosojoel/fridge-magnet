@@ -18,7 +18,7 @@ private struct OnboardingStubTransport: APIClientTransport {
         let url = request.url!
         switch outcome {
         case .success(let household):
-            let data = try JSONEncoder().encode(household)
+            let data = try ServerWire.encoder.encode(household)
             return (data, HTTPURLResponse(url: url, statusCode: 201, httpVersion: nil, headerFields: nil)!)
         case .failure(let status):
             return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
@@ -45,7 +45,7 @@ private actor GatedTransport: APIClientTransport {
         let url = request.url!
         switch outcome {
         case .success(let household):
-            let data = try JSONEncoder().encode(household)
+            let data = try ServerWire.encoder.encode(household)
             return (data, HTTPURLResponse(url: url, statusCode: 201, httpVersion: nil, headerFields: nil)!)
         case .failure(let status):
             return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)

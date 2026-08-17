@@ -41,7 +41,7 @@ private actor RecadoDetailStubTransport: APIClientTransport {
         if request.httpMethod == "GET" {
             switch commentsOutcome {
             case .success(let comments):
-                let data = try JSONEncoder().encode(comments)
+                let data = try ServerWire.encoder.encode(comments)
                 return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case .failure(let status):
                 return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
@@ -54,7 +54,7 @@ private actor RecadoDetailStubTransport: APIClientTransport {
         }
         switch createOutcome {
         case .success(let comment):
-            let data = try JSONEncoder().encode(comment)
+            let data = try ServerWire.encoder.encode(comment)
             return (data, HTTPURLResponse(url: url, statusCode: 201, httpVersion: nil, headerFields: nil)!)
         case .failure(let status):
             return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
@@ -86,13 +86,13 @@ private actor RecadoDetailGatedTransport: APIClientTransport {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let url = request.url!
         if request.httpMethod == "GET" {
-            let data = try JSONEncoder().encode(commentsPage)
+            let data = try ServerWire.encoder.encode(commentsPage)
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
 
         createCallCount += 1
         await waitUntilReleased()
-        let data = try JSONEncoder().encode(createdComment)
+        let data = try ServerWire.encoder.encode(createdComment)
         return (data, HTTPURLResponse(url: url, statusCode: 201, httpVersion: nil, headerFields: nil)!)
     }
 

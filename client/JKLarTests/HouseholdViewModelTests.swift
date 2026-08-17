@@ -52,17 +52,17 @@ private actor HouseholdStubTransport: APIClientTransport {
     private static func encode(_ response: Response, url: URL) throws -> (Data, HTTPURLResponse) {
         switch response {
         case .household(let dto):
-            let data = try JSONEncoder().encode(dto)
+            let data = try ServerWire.encoder.encode(dto)
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         case .members(let dtos):
-            let data = try JSONEncoder().encode(dtos)
+            let data = try ServerWire.encoder.encode(dtos)
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         case .noHousehold:
             return (Data(), HTTPURLResponse(url: url, statusCode: 403, httpVersion: nil, headerFields: nil)!)
         case .noContent:
             return (Data(), HTTPURLResponse(url: url, statusCode: 204, httpVersion: nil, headerFields: nil)!)
         case .apiError(let code, let status):
-            let data = try JSONEncoder().encode(APIErrorResponse(code: code, message: "erro de teste"))
+            let data = try ServerWire.encoder.encode(APIErrorResponse(code: code, message: "erro de teste"))
             return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
         }
     }

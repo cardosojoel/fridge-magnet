@@ -29,7 +29,7 @@ actor FakeTransport: APIClientTransport {
         self.refreshedAccessToken = refreshedAccessToken
         self.refreshedRefreshToken = refreshedRefreshToken
         self.refreshStatus = refreshStatus
-        self.householdData = try! JSONEncoder().encode(household)
+        self.householdData = try! ServerWire.encoder.encode(household)
         self.householdAlwaysFails = householdAlwaysFails
     }
 
@@ -50,7 +50,7 @@ actor FakeTransport: APIClientTransport {
                 expiresIn: 900,
                 user: UserDTO(id: UUID())
             )
-            return (try! JSONEncoder().encode(session), response(url, 200))
+            return (try! ServerWire.encoder.encode(session), response(url, 200))
         }
 
         if path.hasSuffix("/auth/session") {
@@ -98,7 +98,7 @@ final class APIClientRefreshTests: XCTestCase {
         let transport = FakeTransport(acceptedAccessToken: "post-refresh-access", refreshedAccessToken: "post-refresh-access")
         let client = APIClient(transport: transport, baseURL: url())
 
-        let body = try JSONEncoder().encode(["ping": "pong"])
+        let body = try ServerWire.encoder.encode(["ping": "pong"])
         _ = try? await client.send(path: "api/v1/households/current", method: "POST", body: body, requiresAuth: true)
 
         let requests = await transport.requests(pathSuffix: "households/current")

@@ -96,7 +96,7 @@ private actor MuralFeedStubTransport: APIClientTransport {
             }
             switch setReactionOutcome {
             case .success(let summary):
-                let data = try JSONEncoder().encode(summary)
+                let data = try ServerWire.encoder.encode(summary)
                 return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case .failure(let status):
                 return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
@@ -119,7 +119,7 @@ private actor MuralFeedStubTransport: APIClientTransport {
         }
         switch photoURLsOutcome {
         case .success(let response):
-            let data = try JSONEncoder().encode(response)
+            let data = try ServerWire.encoder.encode(response)
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         case .failure(let status):
             return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
@@ -134,7 +134,7 @@ private actor MuralFeedStubTransport: APIClientTransport {
     private static func encode(_ outcome: Outcome, url: URL) throws -> (Data, HTTPURLResponse) {
         switch outcome {
         case .page(let page):
-            let data = try JSONEncoder().encode(page)
+            let data = try ServerWire.encoder.encode(page)
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         case .failure(let status):
             return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
@@ -158,7 +158,7 @@ private actor MuralFeedGatedTransport: APIClientTransport {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         callCount += 1
         await waitUntilReleased()
-        let data = try JSONEncoder().encode(page)
+        let data = try ServerWire.encoder.encode(page)
         return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
 
@@ -203,12 +203,12 @@ private actor MuralFeedConcurrencyGateTransport: APIClientTransport {
         let hasCursor = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.contains(where: { $0.name == "cursor" }) ?? false
         guard hasCursor else {
-            let data = try JSONEncoder().encode(firstPage)
+            let data = try ServerWire.encoder.encode(firstPage)
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
         nextPageCallCount += 1
         await waitUntilReleased()
-        let data = try JSONEncoder().encode(nextPage)
+        let data = try ServerWire.encoder.encode(nextPage)
         return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
 
@@ -250,14 +250,14 @@ private actor MuralFeedReactionGatedTransport: APIClientTransport {
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let url = request.url!
         guard url.path.hasSuffix("/reactions") else {
-            let data = try JSONEncoder().encode(page)
+            let data = try ServerWire.encoder.encode(page)
             return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
 
         let index = reactionCallCount
         reactionCallCount += 1
         await waitUntilReleased(index)
-        let data = try JSONEncoder().encode(responses[index])
+        let data = try ServerWire.encoder.encode(responses[index])
         return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
 
