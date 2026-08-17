@@ -159,21 +159,20 @@ struct ComposeRecadoView: View {
         }
     }
 
-    // MARK: - Fotos (plano 02-06 Task 1/2)
+    // MARK: - Fotos (plano 02-06 Task 1/2; reapresentadas pelo plano 02-13 Task 2)
 
+    /// Fotos lideram o compose (a inversão do Instagram — D-13 corpo item 1): sem nenhuma
+    /// foto, o convite grande de largura inteira É o próprio seletor de fotos; com fotos, o
+    /// carrossel quadrado de largura inteira no lugar da antiga tira de miniaturas
+    /// (Supersessão item 4). O `onChange` da seleção mora aqui, uma vez só — o seletor tem
+    /// dois rótulos possíveis (convite grande / linha compacta) e o carregamento dos bytes
+    /// não pode rodar em dobro.
     private var photoSection: some View {
         VStack(alignment: .leading, spacing: JKSpacing.sm) {
             if viewModel.stagedPhotos.isEmpty {
-                addPhotosButton
-                    .padding(.vertical, JKSpacing.xl)
+                photoInvite
             } else {
-                // Sem rolagem interna (Supersessão item 3) — a Task 2 do plano 02-13 troca
-                // esta tira de miniaturas pelo carrossel quadrado de largura inteira.
-                HStack(spacing: JKSpacing.sm) {
-                    ForEach(viewModel.stagedPhotos) { photo in
-                        stagedPhotoThumbnail(photo)
-                    }
-                }
+                stagedPhotoCarousel
 
                 HStack(spacing: JKSpacing.sm) {
                     addPhotosButton
@@ -189,8 +188,46 @@ struct ComposeRecadoView: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .onChange(of: photoPickerSelection) { _, newItems in
+            guard !newItems.isEmpty else { return }
+            Task {
+                let inputs = await Self.loadStagedPhotoInputs(from: newItems)
+                viewModel.addPhotos(inputs)
+                photoPickerSelection = []
+            }
+        }
     }
 
+    /// Convite grande sem nenhuma foto anexada: glifo de foto com sinal de mais mais a cópia
+    /// de adicionar fotos (papel de corpo, tom secundário), centrados sobre a cor de
+    /// superfície de cartão com o arredondamento de controle e a altura mínima declarada
+    /// pelo contrato. É o rótulo do próprio seletor de fotos — não um botão separado que
+    /// abre um seletor (D-13 corpo item 1); substitui o antigo espaçamento vertical extra em
+    /// volta do botão de adicionar (Supersessão item 2).
+    private var photoInvite: some View {
+        PhotosPicker(
+            selection: $photoPickerSelection,
+            maxSelectionCount: max(0, ComposeRecadoViewModel.maxPhotos - viewModel.stagedPhotos.count),
+            matching: .images
+        ) {
+            VStack(spacing: JKSpacing.sm) {
+                Image(systemName: "photo.badge.plus")
+                    .font(JKTypography.heading)
+                Text(JKCopy.muralComposeAddPhotosCTA)
+                    .font(JKTypography.body)
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: JKLayout.composePhotoInviteMinHeight)
+            .background(JKColor.jkCardSurfaceBase, in: JKLayout.controlShape)
+            .contentShape(JKLayout.controlShape)
+        }
+        .buttonStyle(.plain)
+        .disabled(!viewModel.canAddMorePhotos)
+    }
+
+    /// Linha compacta de adicionar mais fotos + contador, mostrada logo abaixo do carrossel
+    /// quando já há fotos anexadas — mesmas cópias e mesma regra de sempre (o seletor
+    /// desabilita ao chegar no teto de dez). A escuta da seleção mora em `photoSection`.
     private var addPhotosButton: some View {
         PhotosPicker(
             selection: $photoPickerSelection,
@@ -200,14 +237,6 @@ struct ComposeRecadoView: View {
             Label(JKCopy.muralComposeAddPhotosCTA, systemImage: "photo.badge.plus")
         }
         .disabled(!viewModel.canAddMorePhotos)
-        .onChange(of: photoPickerSelection) { _, newItems in
-            guard !newItems.isEmpty else { return }
-            Task {
-                let inputs = await Self.loadStagedPhotoInputs(from: newItems)
-                viewModel.addPhotos(inputs)
-                photoPickerSelection = []
-            }
-        }
     }
 
     /// Carrega os bytes de cada item selecionado e detecta o `Content-Type` real pelos bytes
@@ -234,11 +263,28 @@ struct ComposeRecadoView: View {
         return mimeType
     }
 
-    private func stagedPhotoThumbnail(_ photo: ComposeRecadoViewModel.StagedPhoto) -> some View {
+    /// Carrossel quadrado de largura inteira das fotos anexadas — o mesmo componente e a
+    /// mesma proporção (1:1) que o cartão do feed já usa (`RecadoCard.photoCarousel`), uma
+    /// página por foto; o indicador de pontos só aparece com 2+ itens, regra do próprio
+    /// componente. Cantos no arredondamento de controle (aqui não há o cartão do feed em
+    /// volta para herdar raio).
+    private var stagedPhotoCarousel: some View {
+        JKPhotoCarousel(items: viewModel.stagedPhotos) { photo in
+            stagedPhotoPage(photo)
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(JKLayout.controlShape)
+    }
+
+    /// Uma página do carrossel: a imagem dos bytes já carregados (mesma ramificação por
+    /// plataforma da antiga miniatura — movida, não reescrita), com a sobreposição de estado
+    /// de envio da página e o botão de remover no canto superior direito. Esta sobreposição é
+    /// o único sinal de que uma foto falhou (T-02-79) — sem ela, uma foto falhada ficaria
+    /// idêntica a uma enviada e a pessoa publicaria achando que anexou o que não anexou.
+    private func stagedPhotoPage(_ photo: ComposeRecadoViewModel.StagedPhoto) -> some View {
         ZStack(alignment: .topTrailing) {
             thumbnailImage(for: photo)
-                .frame(width: JKLayout.stagedPhotoThumbnailSize, height: JKLayout.stagedPhotoThumbnailSize)
-                .clipShape(RoundedRectangle(cornerRadius: JKLayout.controlCornerRadius, style: .continuous))
+                .clipped()
                 .overlay {
                     stagedPhotoStateOverlay(photo)
                 }
@@ -264,14 +310,20 @@ struct ComposeRecadoView: View {
         #endif
     }
 
-    /// `pending`/`uploading` mostram progresso na própria miniatura (as três etapas de envio
-    /// — presign, PUT, confirm — nunca deixam a pessoa sem sinal); `failed` mostra ícone de
-    /// retentativa + o rótulo de falha, ligado a `retryUpload(photoID:)`; `uploaded` não
-    /// sobrepõe nada.
+    /// Os quatro estados de envio por foto, preservados verbatim como sobreposição da página
+    /// do carrossel (antes, da miniatura): `pending`/`uploading` escurecem e mostram
+    /// progresso — o mesmo desenho nos dois, em ramos separados de propósito, um por estado
+    /// (as três etapas de envio — presign, PUT, confirm — nunca deixam a pessoa sem sinal);
+    /// `failed` mostra ícone de retentativa + o rótulo de falha, ligado ao método de
+    /// retentativa por foto do view-model; `uploaded` não sobrepõe nada.
     @ViewBuilder
     private func stagedPhotoStateOverlay(_ photo: ComposeRecadoViewModel.StagedPhoto) -> some View {
         switch photo.uploadState {
-        case .pending, .uploading:
+        case .pending:
+            Color.black.opacity(0.35)
+            ProgressView()
+                .tint(.white)
+        case .uploading:
             Color.black.opacity(0.35)
             ProgressView()
                 .tint(.white)
@@ -294,7 +346,8 @@ struct ComposeRecadoView: View {
 
     /// `xmark.circle.fill` em `.secondary` — remover uma foto ainda não publicada é uma
     /// edição desfazível, nunca a remoção de dado real (§Color, "não destrutivo"). Área
-    /// tocável de `JKLayout.minTapTarget` mesmo sobre uma miniatura menor.
+    /// tocável de `JKLayout.minTapTarget`, no canto superior direito de cada página do
+    /// carrossel.
     private func removeStagedPhotoButton(_ photo: ComposeRecadoViewModel.StagedPhoto) -> some View {
         Button {
             viewModel.removePhoto(id: photo.id)
@@ -313,6 +366,12 @@ struct ComposeRecadoView: View {
     private var optionRows: some View {
         VStack(alignment: .leading, spacing: JKSpacing.md) {
             mentionSection
+
+            // POSIÇÃO RESERVADA (plano 02-10): a linha "Adicionar localização" do adendo 1
+            // (D-12) encaixa IMEDIATAMENTE abaixo da linha de marcar alguém, aqui — o
+            // executor do plano 02-10 insere a linha dele neste ponto, sem inventar outra
+            // posição (02-UI-SPEC.md § Addendum 2, D-13 corpo item 3, "Reserved extension
+            // point"). D-13 só reserva a posição; nenhum código de localização entra aqui.
         }
     }
 
