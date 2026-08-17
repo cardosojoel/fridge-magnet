@@ -89,6 +89,55 @@ final class RecadoPinArchiveTests: XCTestCase {
         return try XCTUnwrap(all.first { $0.id == recadoID }, "recado \(recadoID) ausente do feed")
     }
 
+    /// As rotas de arquivar/desarquivar também nunca mandam corpo (T-02-66).
+    @discardableResult
+    private static func archiveRequest(
+        app: Application,
+        method: HTTPMethod,
+        bearer: String,
+        recadoID: UUID
+    ) async throws -> (status: HTTPStatus, dto: RecadoDTO?) {
+        var status: HTTPStatus = .internalServerError
+        var dto: RecadoDTO?
+        try await app.testable().test(
+            method, "/api/v1/recados/\(recadoID)/archive",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                status = res.status
+                dto = try? res.content.decode(RecadoDTO.self)
+            }
+        )
+        return (status, dto)
+    }
+
+    @discardableResult
+    private static func archive(app: Application, bearer: String, recadoID: UUID) async throws -> (status: HTTPStatus, dto: RecadoDTO?) {
+        try await archiveRequest(app: app, method: .PUT, bearer: bearer, recadoID: recadoID)
+    }
+
+    @discardableResult
+    private static func unarchive(app: Application, bearer: String, recadoID: UUID) async throws -> (status: HTTPStatus, dto: RecadoDTO?) {
+        try await archiveRequest(app: app, method: .DELETE, bearer: bearer, recadoID: recadoID)
+    }
+
+    private static func getArchived(app: Application, bearer: String) async throws -> (status: HTTPStatus, items: [RecadoDTO]?) {
+        var status: HTTPStatus = .internalServerError
+        var items: [RecadoDTO]?
+        try await app.testable().test(
+            .GET, "/api/v1/recados/archived",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                status = res.status
+                items = try? res.content.decode([RecadoDTO].self)
+            }
+        )
+        return (status, items)
+    }
+
     // MARK: Task 1 — fixar/desafixar (D-14)
 
     func testAuthorNonAdminCanPinOwnRecado() async throws {
@@ -239,6 +288,194 @@ final class RecadoPinArchiveTests: XCTestCase {
             XCTAssertFalse(asThird.canPin)
             XCTAssertFalse(asThird.canArchive)
             XCTAssertFalse(asThird.canUnarchive)
+        }
+    }
+
+    // MARK: Task 2 — arquivar/desarquivar e painel do admin (D-15)
+
+    func testAuthorNonAdminCanArchiveOwnRecado() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let author = members[1]
+
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "para arquivar")
+            let (status, dto) = try await Self.archive(app: app, bearer: author.token, recadoID: recado.id)
+
+            XCTAssertEqual(status, .ok)
+            XCTAssertNotNil(try XCTUnwrap(dto).archivedAt, "arquivar devolve o instante de arquivamento preenchido")
+        }
+    }
+
+    func testAdminCanArchiveOtherMembersRecado() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let admin = members[0]
+            let author = members[1]
+
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "arquivado pelo admin")
+            let (status, dto) = try await Self.archive(app: app, bearer: admin.token, recadoID: recado.id)
+
+            XCTAssertEqual(status, .ok)
+            XCTAssertNotNil(try XCTUnwrap(dto).archivedAt)
+        }
+    }
+
+    func testThirdMemberCannotArchiveOthersRecadoAndNothingChanges() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let author = members[1]
+            let third = members[2]
+
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "recado alheio")
+            let (status, _) = try await Self.archive(app: app, bearer: third.token, recadoID: recado.id)
+            XCTAssertEqual(status, .forbidden)
+
+            // Nada mudou: o recado continua visível no feed do autor, não arquivado.
+            let fromFeed = try await Self.findInFeed(app: app, bearer: author.token, recadoID: recado.id)
+            XCTAssertNil(fromFeed.archivedAt)
+        }
+    }
+
+    func testArchivingPinnedRecadoClearsPinInSameSave() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let admin = members[0]
+            let author = members[1]
+
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "fixado e arquivado")
+            try await Self.pin(app: app, bearer: author.token, recadoID: recado.id)
+
+            let (status, dto) = try await Self.archive(app: app, bearer: author.token, recadoID: recado.id)
+            XCTAssertEqual(status, .ok)
+            let archived = try XCTUnwrap(dto)
+            XCTAssertNotNil(archived.archivedAt)
+            XCTAssertNil(archived.pinnedAt, "um recado fora do mural não pode continuar preso ao topo do mural")
+
+            // A listagem do admin confirma o estado persistido: arquivado E sem fixação.
+            let (_, items) = try await Self.getArchived(app: app, bearer: admin.token)
+            let listed = try XCTUnwrap(try XCTUnwrap(items).first { $0.id == recado.id })
+            XCTAssertNotNil(listed.archivedAt)
+            XCTAssertNil(listed.pinnedAt)
+        }
+    }
+
+    func testArchivingAlreadyArchivedRecadoIs404() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let author = members[1]
+
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "arquivado duas vezes")
+            try await Self.archive(app: app, bearer: author.token, recadoID: recado.id)
+
+            // Já saiu do mural — a segunda tentativa não o encontra.
+            let (status, _) = try await Self.archive(app: app, bearer: author.token, recadoID: recado.id)
+            XCTAssertEqual(status, .notFound)
+        }
+    }
+
+    func testNonAdminGets403OnArchivedList() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let author = members[1]
+
+            // Negado pelo RequireRoleMiddleware antes de o handler rodar.
+            let (status, _) = try await Self.getArchived(app: app, bearer: author.token)
+            XCTAssertEqual(status, .forbidden)
+        }
+    }
+
+    func testNonAdminGets403OnUnarchiveEvenForOwnArchivedRecado() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let author = members[1]
+
+            // O cenário exato de D-15: o autor não-admin arquivou o PRÓPRIO recado — e
+            // mesmo assim não o recupera sozinho. É o único caso que distingue "só admin
+            // desarquiva" de "só o autor desarquiva".
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "arquivado pelo próprio autor")
+            let (archiveStatus, _) = try await Self.archive(app: app, bearer: author.token, recadoID: recado.id)
+            XCTAssertEqual(archiveStatus, .ok)
+
+            let (status, _) = try await Self.unarchive(app: app, bearer: author.token, recadoID: recado.id)
+            XCTAssertEqual(status, .forbidden)
+        }
+    }
+
+    func testAdminListsArchivedNewestFirstScopedToHousehold() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let (_, membersB) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let admin = members[0]
+            let author = members[1]
+            let adminB = membersB[0]
+
+            // Casa B tem um recado arquivado DE VERDADE — linha real a não ser vista
+            // (uma lista vazia por ausência de dado não provaria isolamento).
+            let recadoB = try await Self.postRecado(app: app, bearer: adminB.token, text: "arquivado da casa B")
+            try await Self.archive(app: app, bearer: adminB.token, recadoID: recadoB.id)
+
+            let first = try await Self.postRecado(app: app, bearer: author.token, text: "arquivado primeiro")
+            let second = try await Self.postRecado(app: app, bearer: author.token, text: "arquivado depois")
+            try await Self.archive(app: app, bearer: author.token, recadoID: first.id)
+            try await Self.archive(app: app, bearer: author.token, recadoID: second.id)
+
+            let (status, items) = try await Self.getArchived(app: app, bearer: admin.token)
+            XCTAssertEqual(status, .ok)
+            let list = try XCTUnwrap(items)
+
+            // Do mais recentemente arquivado para o mais antigo, cada item com o instante
+            // preenchido — e nada da casa B.
+            XCTAssertEqual(list.map(\.id), [second.id, first.id])
+            XCTAssertTrue(list.allSatisfy { $0.archivedAt != nil })
+            XCTAssertFalse(list.contains { $0.id == recadoB.id }, "recado arquivado de outra casa nunca aparece")
+        }
+    }
+
+    func testAdminUnarchivesAndPinIsNeverRestored() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let admin = members[0]
+            let author = members[1]
+
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "vai e volta")
+            try await Self.pin(app: app, bearer: author.token, recadoID: recado.id)
+            try await Self.archive(app: app, bearer: author.token, recadoID: recado.id)
+
+            let (status, dto) = try await Self.unarchive(app: app, bearer: admin.token, recadoID: recado.id)
+            XCTAssertEqual(status, .ok)
+            let restored = try XCTUnwrap(dto)
+            XCTAssertNil(restored.archivedAt, "desarquivar limpa o arquivamento")
+            XCTAssertNil(restored.pinnedAt, "desarquivar nunca restaura fixação — fixar de novo é ação explícita")
+        }
+    }
+
+    func testUnarchiveWhenNotArchivedIsIdempotent() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let admin = members[0]
+            let author = members[1]
+
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "nunca arquivado")
+            let (status, dto) = try await Self.unarchive(app: app, bearer: admin.token, recadoID: recado.id)
+
+            XCTAssertEqual(status, .ok)
+            XCTAssertNil(try XCTUnwrap(dto).archivedAt)
+        }
+    }
+
+    func testUnarchiveOnRecadoFromAnotherHouseholdIs404() async throws {
+        try await TestSupport.withApp { app in
+            let (_, membersA) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let (_, membersB) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let adminA = membersA[0]
+            let adminB = membersB[0]
+
+            let recadoB = try await Self.postRecado(app: app, bearer: adminB.token, text: "da casa B")
+            try await Self.archive(app: app, bearer: adminB.token, recadoID: recadoB.id)
+
+            // 404, nunca 403 de handler: a RLS torna a linha invisível (T-02-67).
+            let (status, _) = try await Self.unarchive(app: app, bearer: adminA.token, recadoID: recadoB.id)
+            XCTAssertEqual(status, .notFound)
         }
     }
 }
