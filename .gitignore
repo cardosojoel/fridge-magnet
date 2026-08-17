@@ -14,6 +14,10 @@
 *.p8
 *.pem
 
+# DEVELOPMENT_TEAM / client IDs de OAuth — específicos de cada desenvolvedor/máquina, nunca
+# versionados. Ver client/Local.xcconfig.example (esse sim commitado, como template).
+client/Local.xcconfig
+
 # Artefatos gerados pelo XcodeGen a partir de client/project.yml (plano 01-03) — nunca versionados
 client/JKLar.xcodeproj/
 client/JKLar/Info.plist

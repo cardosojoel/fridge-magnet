@@ -4,6 +4,10 @@ options:
     iOS: "18.0"
     macOS: "26.0"
   createIntermediateGroups: true
+# Local.xcconfig (git-ignorado) fornece DEVELOPMENT_TEAM/GOOGLE_CLIENT_ID/etc como valores reais de
+# desenvolvimento local — nunca versionados. Sem isso, cada `xcodegen generate` reseta essas chaves
+# pro texto literal "$(DEVELOPMENT_TEAM)" (a env var só existe se exportada manualmente na sessão de
+# shell, o que não sobrevive entre invocações). Ver client/Local.xcconfig.example para o template.
 settings:
   base:
     DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
@@ -11,6 +15,9 @@ settings:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
+  configFiles:
+    Debug: Local.xcconfig
+    Release: Local.xcconfig
 packages:
   # Pacote SPM local — contrato de DTOs compartilhado com o backend (plano 01-01, ver
   # Shared/Package.swift). O cliente importa `JKLarShared` para falar exatamente a mesma

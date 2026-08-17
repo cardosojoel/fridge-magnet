@@ -1,0 +1,26 @@
+// Local.xcconfig.example — template para desenvolvimento local
+//
+// Copie este arquivo para `Local.xcconfig` (sem o `.example`) na mesma pasta e preencha com
+// valores reais. `Local.xcconfig` está no .gitignore — nunca é commitado, cada desenvolvedor
+// (ou máquina) tem o seu. O `client/project.yml` referencia essas chaves via `$(CHAVE)`, então
+// sem este arquivo elas ficam vazias e o build falha (ou, no caso de DEVELOPMENT_TEAM, o Xcode
+// pede pra selecionar um time manualmente toda vez que `xcodegen generate` roda de novo).
+//
+// Depois de criar/editar este arquivo, rode `xcodegen generate` (ou os scripts em scripts/) pra
+// que o valor seja lido.
+
+// Team ID da Apple Developer — visível em Xcode → Settings → Accounts → time selecionado, ou em
+// developer.apple.com/account (Membership). Time pessoal (grátis) NÃO suporta Sign in with Apple
+// nem Push Notifications — precisa da Apple Developer Program paga para essas duas capabilities
+// (ver CLAUDE.md, "Apple Developer Program membership... hard prerequisite for phase 1").
+DEVELOPMENT_TEAM =
+
+// Client ID do OAuth do Google (Google Cloud Console → Credentials), plano 01-08.
+GOOGLE_CLIENT_ID =
+
+// "Reversed client ID" do Google — mesma tela do console que mostra o GOOGLE_CLIENT_ID, mas não é
+// uma transformação textual simples do client ID (ver comentário em project.yml).
+GOOGLE_REVERSED_CLIENT_ID =
+
+// Client ID do app registration da Microsoft (Entra ID / Azure AD), plano 01-08.
+MICROSOFT_CLIENT_ID =
