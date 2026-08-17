@@ -11,6 +11,17 @@ import PackageDescription
 // declarados aqui de novo, de propósito, só para expor os produtos `APNS`/`APNSCore`/`Crypto`
 // diretamente ao target `App` (que fala com `app.apns` e monta a chave `.p8` em
 // `configure.swift`/`Push/`), sem depender de visibilidade transitiva "por acaso".
+//
+// `soto-project/soto` (produto de acesso a S3 abaixo, único da lista de dependências deste
+// pacote) — único pacote externo novo do plano 02-04 (armazenamento de foto em Cloudflare R2,
+// via API S3). Não coberto pela checagem automática de legitimidade (`package-legitimacy
+// check` não cobre SPM, ver 02-RESEARCH.md §Package Legitimacy Audit) — auditoria manual: org
+// dedicada `soto-project`, ~9 anos, 100+ releases, Apache 2.0, 11 repos irmãos (`soto-core`,
+// `soto-codegenerator`, etc.), badge de maturidade "graduated" da Swift Server Working Group.
+// Aprovado no `checkpoint:human-verify` da Task 2 do plano 02-04 (re-verificado ao vivo em
+// 2026-08-17, tag `v7.15.0` confirmada como a mais recente). Só o target `App` depende desse
+// produto — nunca entra no bundle do cliente.
+
 let package = Package(
     name: "App",
     platforms: [
@@ -24,6 +35,7 @@ let package = Package(
         .package(url: "https://github.com/vapor/apns.git", from: "5.0.0"),
         .package(url: "https://github.com/swift-server-community/APNSwift.git", from: "6.1.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
+        .package(url: "https://github.com/soto-project/soto.git", from: "7.15.0"),
         .package(path: "../Shared"),
     ],
     targets: [
@@ -38,6 +50,7 @@ let package = Package(
                 .product(name: "APNS", package: "apnswift"),
                 .product(name: "APNSCore", package: "apnswift"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "SotoS3", package: "soto"),
                 .product(name: "JKLarShared", package: "Shared"),
             ],
             swiftSettings: swiftSettings
