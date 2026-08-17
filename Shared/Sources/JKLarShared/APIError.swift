@@ -24,6 +24,10 @@ public enum APIErrorCode: String, Codable, Sendable {
     /// membro deixaria a casa sem nenhum admin. Plano 01-06; reaproveitado pelo plano 01-10
     /// nas rotas de remoção e saída, que podem violar a mesma invariante.
     case lastAdmin
+    /// `DELETE /api/v1/households/current/members/:memberID` (409) — o admin tentou remover
+    /// a si mesmo por esta rota. Sair tem rota própria (`DELETE .../membership`), que aplica
+    /// a invariante de último admin em vez de escapar dela (plano 01-10).
+    case cannotRemoveSelf
 }
 
 /// Corpo de erro padrão devolvido por qualquer rota da API.

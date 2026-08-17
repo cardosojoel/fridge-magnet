@@ -40,11 +40,16 @@ struct HouseholdController: RouteCollection {
         let scoped = authenticated.grouped(HouseholdContextMiddleware())
         scoped.get("current", use: current)
         scoped.get("current", "members", use: members)
+        // Auto-serviço (plano 01-10): qualquer papel pode sair, sem `RequireRoleMiddleware`.
+        // Caminho deliberadamente separado da rota admin-only abaixo — nunca um ramo
+        // "a menos que seja você mesmo" dentro dela (T-10-04/T-10-06).
+        scoped.delete("current", "membership", use: leaveHousehold)
 
         let adminScoped = scoped.grouped(RequireRoleMiddleware([.admin]))
         adminScoped.post("current", "invites", use: createInvite)
         adminScoped.get("current", "invites", use: listInvites)
         adminScoped.patch("current", "members", ":memberID", "role", use: updateMemberRole)
+        adminScoped.delete("current", "members", ":memberID", use: removeMember)
     }
 
     @Sendable
@@ -301,6 +306,8 @@ struct HouseholdController: RouteCollection {
         guard let context = req.householdContext else {
             throw Abort(.forbidden)
         }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
 
         let memberships = try await HouseholdMember.query(on: req.scopedDB)
             .filter(\.$household.$id == context.householdID)
@@ -313,7 +320,11 @@ struct HouseholdController: RouteCollection {
                 id: try membership.requireID(),
                 displayName: membership.user.displayName,
                 role: MemberRole(rawValue: membership.role) ?? .adulto,
-                joinedAt: membership.createdAt ?? Date()
+                joinedAt: membership.createdAt ?? Date(),
+                // Computado no servidor, nunca inferido no cliente (plano 01-10) —
+                // `HouseholdViewModel.canRemove(_:)` usa isto para esconder a ação de
+                // remover na própria linha.
+                isSelf: membership.$user.id == userID
             )
         }
         return try Self.jsonResponse(dtos, status: .ok)
@@ -326,6 +337,8 @@ struct HouseholdController: RouteCollection {
         guard let context = req.householdContext else {
             throw Abort(.forbidden)
         }
+        let requester = try req.auth.require(User.self)
+        let requesterID = try requester.requireID()
         guard
             let memberIDRaw = req.parameters.get("memberID"),
             let memberID = UUID(uuidString: memberIDRaw)
@@ -381,16 +394,138 @@ struct HouseholdController: RouteCollection {
             id: try member.requireID(),
             displayName: member.user.displayName,
             role: body.role,
-            joinedAt: member.createdAt ?? Date()
+            joinedAt: member.createdAt ?? Date(),
+            isSelf: member.$user.id == requesterID
         )
         return try Self.jsonResponse(dto, status: .ok)
     }
 
-    /// Verdadeiro se remover **ou** rebaixar `excludingMemberID` deixaria a casa sem nenhum
-    /// admin restante. Chamada sempre depois de `lockHouseholdRow` travar a linha da casa —
-    /// nasce aqui com um único consumidor (`updateMemberRole`) e é escrita para os outros
-    /// dois que o plano 01-10 adiciona (remover membro, sair da casa): três cópias
-    /// divergentes desta checagem é exatamente como uma casa acaba órfã de admin.
+    // MARK: DELETE /api/v1/households/current/members/:memberID
+
+    /// Admin-only (`RequireRoleMiddleware([.admin])`, boot()) — remove outro membro da casa.
+    /// IDENT-06 aplicado a uma segunda ação (a primeira foi gerar convite, plano 01-06), sem
+    /// caminho paralelo de autorização.
+    @Sendable
+    func removeMember(req: Request) async throws -> Response {
+        guard let context = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let requester = try req.auth.require(User.self)
+        let requesterID = try requester.requireID()
+        guard
+            let memberIDRaw = req.parameters.get("memberID"),
+            let memberID = UUID(uuidString: memberIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "memberID inválido.", status: .badRequest)
+        }
+        guard let sql = req.scopedDB as? SQLDatabase else {
+            fatalError("HouseholdController.removeMember exige um SQLDatabase (FluentSQL escape hatch)")
+        }
+
+        // Sob RLS, um memberID de outra casa simplesmente não existe nesta consulta — 404,
+        // nunca 403 (mesmo raciocínio de updateMemberRole, T-06-05/T-10-05): o handler não
+        // pode confirmar a existência de um membro alheio.
+        guard let member = try await HouseholdMember.query(on: req.scopedDB)
+            .filter(\.$id == memberID)
+            .filter(\.$household.$id == context.householdID)
+            .first()
+        else {
+            throw Abort(.notFound)
+        }
+
+        // Remover a si mesmo por esta rota admin-only é sempre recusado — sair tem rota
+        // própria (`DELETE .../membership`), que aplica a invariante de último admin em vez
+        // de escapar dela (T-10-06).
+        guard member.$user.id != requesterID else {
+            return try Self.errorResponse(
+                code: .cannotRemoveSelf,
+                message: "Use a opção Sair da casa para deixar a casa.",
+                status: .conflict
+            )
+        }
+
+        // `SELECT ... FOR UPDATE` na linha da casa — mesmo lock reaproveitado pelo cap de 10
+        // (join) e pelo rebaixamento de papel (updateMemberRole), agora também contra a
+        // corrida simétrica de duas remoções/saídas concorrentes (T-10-01).
+        guard try await Self.lockHouseholdRow(householdID: context.householdID, on: sql) != nil else {
+            throw Abort(.internalServerError)
+        }
+
+        let wouldOrphanHousehold = try await Self.wouldLeaveHouseholdWithoutAdmin(
+            householdID: context.householdID,
+            excludingMemberID: memberID,
+            on: req.scopedDB
+        )
+        guard !wouldOrphanHousehold else {
+            return try Self.errorResponse(
+                code: .lastAdmin,
+                message: "A casa precisa de pelo menos um admin.",
+                status: .conflict
+            )
+        }
+
+        try await member.delete(on: req.scopedDB)
+        return Response(status: .noContent)
+    }
+
+    // MARK: DELETE /api/v1/households/current/membership
+
+    /// Auto-serviço (boot() não coloca `RequireRoleMiddleware` nesta rota) — qualquer papel
+    /// pode sair da própria casa. Nunca aceita um alvo: opera só sobre a linha do próprio
+    /// requisitante (T-10-04), o que também é o que mantém esta rota fora do alcance de
+    /// `RequireRoleMiddleware([.admin])` sem abrir um segundo caminho de remoção de terceiros.
+    @Sendable
+    func leaveHousehold(req: Request) async throws -> Response {
+        guard let context = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+        guard let sql = req.scopedDB as? SQLDatabase else {
+            fatalError("HouseholdController.leaveHousehold exige um SQLDatabase (FluentSQL escape hatch)")
+        }
+
+        guard let membership = try await HouseholdMember.query(on: req.scopedDB)
+            .filter(\.$household.$id == context.householdID)
+            .filter(\.$user.$id == userID)
+            .first()
+        else {
+            // Impossível na prática — HouseholdContextMiddleware já exige esta linha para
+            // resolver o próprio contexto da rota — mas fail-closed em vez de assumir.
+            throw Abort(.notFound)
+        }
+
+        // `SELECT ... FOR UPDATE` na linha da casa — mesmo lock de `removeMember`/
+        // `updateMemberRole`/`join`. É o que serializa dois admins tocando "Sair" no mesmo
+        // segundo: sem ele, os dois passariam pela contagem antes de qualquer um deletar sua
+        // própria linha, e a casa ficaria órfã (T-10-01).
+        guard try await Self.lockHouseholdRow(householdID: context.householdID, on: sql) != nil else {
+            throw Abort(.internalServerError)
+        }
+
+        let wouldOrphanHousehold = try await Self.wouldLeaveHouseholdWithoutAdmin(
+            householdID: context.householdID,
+            excludingMemberID: try membership.requireID(),
+            on: req.scopedDB
+        )
+        guard !wouldOrphanHousehold else {
+            return try Self.errorResponse(
+                code: .lastAdmin,
+                message: "Você é o único admin da casa. Promova outra pessoa a admin antes de sair.",
+                status: .conflict
+            )
+        }
+
+        try await membership.delete(on: req.scopedDB)
+        return Response(status: .noContent)
+    }
+
+    /// Verdadeiro se remover, rebaixar **ou** deixar sair `excludingMemberID` deixaria a casa
+    /// sem nenhum admin restante. Chamada sempre depois de `lockHouseholdRow` travar a linha
+    /// da casa — nasceu no plano 01-06 com um único consumidor (`updateMemberRole`) e o plano
+    /// 01-10 reusa exatamente esta função em `removeMember`/`leaveHousehold`, nunca uma cópia
+    /// adaptada: três implementações divergentes desta checagem é exatamente como uma casa
+    /// acaba órfã de admin.
     static func wouldLeaveHouseholdWithoutAdmin(
         householdID: UUID,
         excludingMemberID: UUID,
