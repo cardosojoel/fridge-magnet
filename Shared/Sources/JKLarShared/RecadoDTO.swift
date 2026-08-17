@@ -224,3 +224,62 @@ public struct UpdateRecadoRequest: Codable, Sendable {
         self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
     }
 }
+
+/// Corpo de `PUT /api/v1/recados/:recadoID/reactions`.
+///
+/// `kind` é o enum fechado `ReactionKind` (D-07): um valor fora do conjunto falha na
+/// decodificação automaticamente (400), sem nenhuma comparação de string escrita à mão. O
+/// tipo deliberadamente não carrega `userId` nem `recadoId` — ambos resolvidos no servidor a
+/// partir do JWT verificado e do parâmetro de rota, mesmo motivo de
+/// `DeviceRegistrationRequest`.
+public struct SetReactionRequest: Codable, Sendable {
+    public var kind: ReactionKind
+
+    public init(kind: ReactionKind) {
+        self.kind = kind
+    }
+}
+
+/// Resposta de `PUT /api/v1/recados/:recadoID/reactions` — mesmo formato que
+/// `RecadoDTO.reactions`/`RecadoDTO.myReaction` usam, calculado pelo mesmo helper
+/// (`RecadoController.reactionSummary`) para o feed e a resposta de reação nunca divergirem.
+public struct RecadoReactionSummaryDTO: Codable, Sendable {
+    public var reactions: [ReactionCountDTO]
+    public var myReaction: ReactionKind?
+
+    public init(reactions: [ReactionCountDTO], myReaction: ReactionKind?) {
+        self.reactions = reactions
+        self.myReaction = myReaction
+    }
+}
+
+/// Corpo de `POST /api/v1/recados/:recadoID/comments`.
+///
+/// Deliberadamente não carrega `authorId` nem `householdId` (mesmo motivo de
+/// `DeviceRegistrationRequest`/`CreateRecadoRequest`): ambos resolvidos no servidor a partir
+/// do JWT verificado e do contexto de sessão. `mentionedUserIDs` usa o mesmo seletor
+/// estruturado do recado (D-06) — marcar dentro de um comentário notifica pelo mesmo
+/// mecanismo do recado (D-09).
+public struct CreateCommentRequest: Codable, Sendable {
+    public var text: String
+    public var mentionedUserIDs: [UUID]
+
+    public init(text: String, mentionedUserIDs: [UUID] = []) {
+        self.text = text
+        self.mentionedUserIDs = mentionedUserIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case mentionedUserIDs
+    }
+
+    // Mesma razão de CreateRecadoRequest.init(from:): mentionedUserIDs ausente no JSON
+    // decodifica como [], não como erro.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.text = try container.decode(String.self, forKey: .text)
+        self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
+    }
+}
+
