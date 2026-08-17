@@ -4,8 +4,15 @@ import Foundation
 import JKLarShared
 import Vapor
 
+/// Sinaliza que algum id em `mentionedUserIDs` não pertence à casa do requisitante — o
+/// handler converte isto em 422 `notHouseholdMember` (plano 02-02, T-02-09). Nunca vazado
+/// como mensagem específica (qual id falhou, se existe em outra casa): isso seria um oráculo
+/// de existência de conta.
+private struct MentionValidationError: Error {}
+
 /// `POST /api/v1/recados`, `GET /api/v1/recados`, `PATCH /api/v1/recados/:recadoID`,
-/// `DELETE /api/v1/recados/:recadoID` — plano 02-01 (MURAL-01 parte texto, MURAL-05).
+/// `DELETE /api/v1/recados/:recadoID` — plano 02-01 (MURAL-01 parte texto, MURAL-05),
+/// menções estruturadas + fan-out de push por menção plano 02-02 (MURAL-02, MURAL-03).
 ///
 /// Toda rota deste controller roda atrás de `HouseholdContextMiddleware`: não existe aqui o
 /// caso de bootstrap sem casa que `HouseholdController.create`/`join` têm — um recado só
@@ -51,6 +58,19 @@ struct RecadoController: RouteCollection {
             )
         }
 
+        // Validação de menção ANTES de qualquer gravação (recado ou linha de menção) — um
+        // id fora da casa recusa a request inteira, nada é persistido (T-02-09).
+        let mentionedUserIDs: [UUID]
+        do {
+            mentionedUserIDs = try await Self.resolveHouseholdMemberUserIDs(body.mentionedUserIDs, on: req.scopedDB)
+        } catch is MentionValidationError {
+            return try Self.errorResponse(
+                code: .notHouseholdMember,
+                message: "Um ou mais pessoas marcadas não pertencem a esta casa.",
+                status: .unprocessableEntity
+            )
+        }
+
         guard let sql = req.scopedDB as? SQLDatabase else {
             fatalError("RecadoController.create exige um SQLDatabase (FluentSQL escape hatch)")
         }
@@ -66,6 +86,16 @@ struct RecadoController: RouteCollection {
             sequence: sequence
         )
         try await recado.save(on: req.scopedDB)
+
+        let recadoID = try recado.requireID()
+        for mentionedUserID in mentionedUserIDs {
+            let mention = RecadoMention(
+                householdID: context.householdID,
+                recadoID: recadoID,
+                mentionedUserID: mentionedUserID
+            )
+            try await mention.save(on: req.scopedDB)
+        }
 
         let dto = try await Self.buildDTO(recado: recado, requesterID: userID, on: req.scopedDB)
         return try Self.jsonResponse(dto, status: .created)
@@ -157,6 +187,42 @@ struct RecadoController: RouteCollection {
                 message: "O texto do recado excede o tamanho máximo permitido.",
                 status: .badRequest
             )
+        }
+
+        let requestedMentionIDs: [UUID]
+        do {
+            requestedMentionIDs = try await Self.resolveHouseholdMemberUserIDs(body.mentionedUserIDs, on: req.scopedDB)
+        } catch is MentionValidationError {
+            return try Self.errorResponse(
+                code: .notHouseholdMember,
+                message: "Um ou mais pessoas marcadas não pertencem a esta casa.",
+                status: .unprocessableEntity
+            )
+        }
+
+        // Substitui o conjunto de menções: as retiradas somem, as acrescentadas entram, as
+        // que permanecem mantêm o created_at original (nunca apagadas+recriadas). Só o
+        // conjunto ACRESCENTADO nesta edição dispara push (Task 2) — evita re-notificar quem
+        // já estava marcado a cada novo PATCH.
+        let existingMentions = try await RecadoMention.query(on: req.scopedDB)
+            .filter(\.$recado.$id == recadoID)
+            .all()
+        let existingMentionedUserIDs = Set(existingMentions.map(\.$mentionedUser.id))
+        let requestedSet = Set(requestedMentionIDs)
+
+        let removedMentions = existingMentions.filter { !requestedSet.contains($0.$mentionedUser.id) }
+        for mention in removedMentions {
+            try await mention.delete(on: req.scopedDB)
+        }
+
+        let addedUserIDs = requestedMentionIDs.filter { !existingMentionedUserIDs.contains($0) }
+        for mentionedUserID in addedUserIDs {
+            let mention = RecadoMention(
+                householdID: recado.$household.id,
+                recadoID: recadoID,
+                mentionedUserID: mentionedUserID
+            )
+            try await mention.save(on: req.scopedDB)
         }
 
         recado.text = normalizedText
@@ -344,6 +410,37 @@ struct RecadoController: RouteCollection {
             commentCount: commentCount,
             latestComments: latestComments
         )
+    }
+
+    // MARK: Menções (plano 02-02, D-05/D-06)
+
+    /// Deduplica preservando a ordem de chegada e valida cada id contra `household_members`
+    /// SOB a conexão escopada — a própria RLS já limita o universo à casa do requisitante, e
+    /// comparar a contagem de ids encontrados com a de ids pedidos é o que transforma
+    /// "invisível" em "recusado" em vez de "silenciosamente ignorado" (T-02-09). Lança
+    /// `MentionValidationError` sem revelar qual id falhou nem se o usuário existe em outra
+    /// casa — isso seria um oráculo de existência de conta.
+    private static func resolveHouseholdMemberUserIDs(
+        _ requested: [UUID],
+        on database: any Database
+    ) async throws -> [UUID] {
+        var seen = Set<UUID>()
+        var deduplicated: [UUID] = []
+        for id in requested where seen.insert(id).inserted {
+            deduplicated.append(id)
+        }
+        guard !deduplicated.isEmpty else {
+            return []
+        }
+
+        let foundUserIDs = try await HouseholdMember.query(on: database)
+            .filter(\.$user.$id ~~ deduplicated)
+            .all()
+            .map(\.$user.id)
+        guard Set(foundUserIDs).count == deduplicated.count else {
+            throw MentionValidationError()
+        }
+        return deduplicated
     }
 
     /// Trim + normaliza string vazia para `nil` (D-01: um recado sem texto tem `text ==

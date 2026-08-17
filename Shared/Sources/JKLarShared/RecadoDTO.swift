@@ -166,19 +166,61 @@ public struct RecadoFeedPage: Codable, Sendable {
 /// servidor a partir do JWT verificado e do contexto de sessão — um campo que não existe no
 /// tipo não pode ser lido por engano, mesmo que o corpo JSON bruto do request contenha essas
 /// chaves (zero-trust do front-end, `.claude/CLAUDE.md`).
+///
+/// `mentionedUserIDs` carrega os identificadores de membro escolhidos num seletor
+/// estruturado (D-06) — o servidor nunca faz varredura de texto procurando `@nome`, então a
+/// ambiguidade de digitação deixa de existir por construção e a marcação sempre aponta para
+/// a pessoa certa. A lista NÃO carrega estado de conclusão: D-04 fixa a marcação como
+/// social, sem "resolvido/pendente".
 public struct CreateRecadoRequest: Codable, Sendable {
     public var text: String?
+    public var mentionedUserIDs: [UUID]
 
-    public init(text: String?) {
+    public init(text: String?, mentionedUserIDs: [UUID] = []) {
         self.text = text
+        self.mentionedUserIDs = mentionedUserIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case mentionedUserIDs
+    }
+
+    // Init manual (não synthesized): `mentionedUserIDs` precisa decodificar como `[]` quando
+    // a chave está AUSENTE do JSON (um cliente anterior a este plano, ou qualquer chamador
+    // que não marque ninguém, nunca envia a chave) — o `= []` do init acima só cobre
+    // construção em Swift, nunca decodificação de um corpo de request real.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.text = try container.decodeIfPresent(String.self, forKey: .text)
+        self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
     }
 }
 
 /// Corpo de `PATCH /api/v1/recados/:recadoID`.
+///
+/// `mentionedUserIDs` substitui o conjunto de menções do recado (não soma) — ver
+/// `CreateRecadoRequest.mentionedUserIDs` para o mesmo contrato de seletor estruturado
+/// (D-06) e de marcação sem estado (D-04).
 public struct UpdateRecadoRequest: Codable, Sendable {
     public var text: String?
+    public var mentionedUserIDs: [UUID]
 
-    public init(text: String?) {
+    public init(text: String?, mentionedUserIDs: [UUID] = []) {
         self.text = text
+        self.mentionedUserIDs = mentionedUserIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case mentionedUserIDs
+    }
+
+    /// Mesma razão de `CreateRecadoRequest.init(from:)`: `mentionedUserIDs` ausente no JSON
+    /// decodifica como `[]`, não como erro.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.text = try container.decodeIfPresent(String.self, forKey: .text)
+        self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
     }
 }
