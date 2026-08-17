@@ -13,11 +13,22 @@ private actor MuralFeedStubTransport: APIClientTransport {
         case failure(status: Int)
     }
 
+    /// Resposta simulada de `POST api/v1/recados/photos/urls` (plano 02-06 Task 3).
+    enum PhotoURLsOutcome {
+        case success(PhotoDownloadURLsResponse)
+        case failure(status: Int)
+    }
+
     /// Página devolvida quando `cursor` é `nil` (primeira carga/`reloadFromTop`).
     private var firstPageOutcome: Outcome
     /// Páginas devolvidas por cursor explícito (`loadNextPage`), chave = valor do cursor.
     private var cursoredOutcomes: [Int64: Outcome]
+    private var photoURLsOutcome: PhotoURLsOutcome = .success(PhotoDownloadURLsResponse(recados: []))
     private(set) var callCount = 0
+    private(set) var photoURLsCallCount = 0
+    /// Um elemento por chamada a `photos/urls`, na ordem em que ocorreram — os
+    /// `recadoIDs` que o corpo daquela chamada pediu.
+    private(set) var photoURLsRequestedIDs: [[UUID]] = []
 
     init(firstPage: Outcome, cursoredPages: [Int64: Outcome] = [:]) {
         self.firstPageOutcome = firstPage
@@ -32,12 +43,34 @@ private actor MuralFeedStubTransport: APIClientTransport {
         cursoredOutcomes[cursor] = outcome
     }
 
+    func setPhotoURLsOutcome(_ outcome: PhotoURLsOutcome) {
+        photoURLsOutcome = outcome
+    }
+
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        callCount += 1
         let url = request.url!
+        if url.path.hasSuffix("/photos/urls") {
+            return try encodePhotoURLs(request: request, url: url)
+        }
+
+        callCount += 1
         let cursor = Self.cursor(from: url)
         let outcome = cursor.flatMap { cursoredOutcomes[$0] } ?? firstPageOutcome
         return try Self.encode(outcome, url: url)
+    }
+
+    private func encodePhotoURLs(request: URLRequest, url: URL) throws -> (Data, HTTPURLResponse) {
+        photoURLsCallCount += 1
+        if let body = request.httpBody, let decoded = try? JSONDecoder().decode(PhotoDownloadURLsRequest.self, from: body) {
+            photoURLsRequestedIDs.append(decoded.recadoIDs)
+        }
+        switch photoURLsOutcome {
+        case .success(let response):
+            let data = try JSONEncoder().encode(response)
+            return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        case .failure(let status):
+            return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
+        }
     }
 
     private static func cursor(from url: URL) -> Int64? {
@@ -139,7 +172,9 @@ private actor MuralFeedConcurrencyGateTransport: APIClientTransport {
 final class MuralFeedViewModelTests: XCTestCase {
     private func url() -> URL { URL(string: "http://test.local")! }
 
-    private func makeRecado(id: UUID = UUID(), sequence: Int64, text: String = "Oi") -> RecadoDTO {
+    private func makeRecado(
+        id: UUID = UUID(), sequence: Int64, text: String = "Oi", photos: [RecadoPhotoRefDTO] = []
+    ) -> RecadoDTO {
         RecadoDTO(
             id: id,
             authorID: UUID(),
@@ -149,7 +184,7 @@ final class MuralFeedViewModelTests: XCTestCase {
             sequence: sequence,
             createdAt: Date(),
             updatedAt: Date(),
-            photos: [],
+            photos: photos,
             mentions: [],
             reactions: [],
             myReaction: nil,
@@ -346,5 +381,129 @@ final class MuralFeedViewModelTests: XCTestCase {
             return XCTFail("esperava .loaded")
         }
         XCTAssertEqual(loadedItems.first?.id, newRecado.id)
+    }
+
+    // MARK: photoURLs(for:) / busca em lote (plano 02-06 Task 3)
+
+    private func makeDownload(id: UUID, url downloadURL: URL = URL(string: "https://storage.example.com/a.jpg")!) -> PhotoDownloadDTO {
+        PhotoDownloadDTO(id: id, position: 0, downloadURL: downloadURL, expiresAt: Date().addingTimeInterval(3600))
+    }
+
+    func testLoadWithTwoOfThreeRecadosHavingPhotosTriggersExactlyOnePhotoURLsCallWithTheirIDs() async {
+        let photoID1 = UUID()
+        let photoID2 = UUID()
+        let withPhoto1 = makeRecado(sequence: 3, photos: [RecadoPhotoRefDTO(id: photoID1, position: 0)])
+        let withoutPhoto = makeRecado(sequence: 2)
+        let withPhoto2 = makeRecado(sequence: 1, photos: [RecadoPhotoRefDTO(id: photoID2, position: 0)])
+        let page = RecadoFeedPage(items: [withPhoto1, withoutPhoto, withPhoto2], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        await sut.load()
+
+        let photoURLsCallCount = await transport.photoURLsCallCount
+        XCTAssertEqual(photoURLsCallCount, 1, "uma chamada em lote, não uma por recado")
+        let requestedIDs = await transport.photoURLsRequestedIDs.last
+        XCTAssertEqual(Set(requestedIDs ?? []), Set([withPhoto1.id, withPhoto2.id]))
+    }
+
+    func testLoadWithNoRecadoHavingPhotosTriggersNoPhotoURLsCall() async {
+        let page = RecadoFeedPage(items: [makeRecado(sequence: 1), makeRecado(sequence: 2)], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        await sut.load()
+
+        let photoURLsCallCount = await transport.photoURLsCallCount
+        XCTAssertEqual(photoURLsCallCount, 0, "nenhum recado com foto, nenhuma chamada de URLs")
+    }
+
+    func testPhotoURLsExposedByPhotoURLsForAfterLoad() async {
+        let photoID = UUID()
+        let recado = makeRecado(sequence: 1, photos: [RecadoPhotoRefDTO(id: photoID, position: 0)])
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let download = makeDownload(id: photoID)
+        await transport.setPhotoURLsOutcome(
+            .success(PhotoDownloadURLsResponse(recados: [RecadoPhotoURLsDTO(recadoID: recado.id, photos: [download])]))
+        )
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        await sut.load()
+
+        XCTAssertEqual(sut.photoURLs(for: recado.id).map(\.id), [photoID])
+    }
+
+    func testLoadNextPageOnlyFetchesURLsForNewPageRecadosNotAlreadyLoadedOnes() async {
+        let firstItem = makeRecado(sequence: 2, photos: [RecadoPhotoRefDTO(id: UUID(), position: 0)])
+        let firstPage = RecadoFeedPage(items: [firstItem], nextCursor: 1)
+        let secondItem = makeRecado(sequence: 1, photos: [RecadoPhotoRefDTO(id: UUID(), position: 0)])
+        let secondPage = RecadoFeedPage(items: [secondItem], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage), cursoredPages: [1: .page(secondPage)])
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+        let requestsAfterFirstLoad = await transport.photoURLsRequestedIDs.count
+
+        await sut.loadNextPage()
+
+        let requestsAfterNextPage = await transport.photoURLsRequestedIDs
+        XCTAssertEqual(requestsAfterNextPage.count, requestsAfterFirstLoad + 1)
+        XCTAssertEqual(requestsAfterNextPage.last, [secondItem.id], "só busca URLs dos recados da página nova")
+    }
+
+    func testReloadFromTopDiscardsPhotoURLsMapAndRefetches() async {
+        let photoID = UUID()
+        let recado = makeRecado(sequence: 1, photos: [RecadoPhotoRefDTO(id: photoID, position: 0)])
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let download = makeDownload(id: photoID)
+        await transport.setPhotoURLsOutcome(
+            .success(PhotoDownloadURLsResponse(recados: [RecadoPhotoURLsDTO(recadoID: recado.id, photos: [download])]))
+        )
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+        XCTAssertFalse(sut.photoURLs(for: recado.id).isEmpty)
+
+        await sut.reloadFromTop()
+
+        let photoURLsCallCount = await transport.photoURLsCallCount
+        XCTAssertEqual(photoURLsCallCount, 2, "busca de novo depois do refresh — URL assinada tem validade curta")
+        XCTAssertFalse(sut.photoURLs(for: recado.id).isEmpty, "mapa repopulado depois do refetch")
+    }
+
+    func testPhotoURLsFetchFailureDoesNotPutFeedInErrorState() async {
+        let recado = makeRecado(sequence: 1, photos: [RecadoPhotoRefDTO(id: UUID(), position: 0)])
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        await transport.setPhotoURLsOutcome(.failure(status: 500))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        await sut.load()
+
+        guard case .loaded(let items) = sut.state else {
+            return XCTFail("uma falha na busca de URLs de foto nunca deve pôr o feed em .error")
+        }
+        XCTAssertEqual(items.map(\.id), [recado.id], "o recado continua visível com o texto")
+        XCTAssertTrue(sut.photoURLs(for: recado.id).isEmpty, "só o carrossel daquele recado fica sem imagem")
+    }
+
+    func testPhotoURLsMapIsInMemoryOnlyNeverSharedAcrossViewModelInstances() async {
+        let photoID = UUID()
+        let recado = makeRecado(sequence: 1, photos: [RecadoPhotoRefDTO(id: photoID, position: 0)])
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let download = makeDownload(id: photoID)
+        await transport.setPhotoURLsOutcome(
+            .success(PhotoDownloadURLsResponse(recados: [RecadoPhotoURLsDTO(recadoID: recado.id, photos: [download])]))
+        )
+        let sut1 = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut1.load()
+        XCTAssertFalse(sut1.photoURLs(for: recado.id).isEmpty)
+
+        // Uma segunda instância, apontando pro mesmo transporte, nunca deveria "herdar" URLs
+        // já buscadas pela primeira — se o mapa fosse persistido em algo compartilhado
+        // (UserDefaults, disco), este teste falharia.
+        let sut2 = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        XCTAssertTrue(sut2.photoURLs(for: recado.id).isEmpty, "o mapa de URLs é só de memória, por instância")
     }
 }
