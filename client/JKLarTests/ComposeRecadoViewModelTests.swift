@@ -9,12 +9,14 @@ import JKLarShared
 private actor CallRecorder {
     private(set) var lastMethod: String?
     private(set) var lastPath: String?
+    private(set) var lastBody: Data?
     private(set) var callCount = 0
     private(set) var pathCounts: [String: Int] = [:]
 
-    func record(method: String, path: String) {
+    func record(method: String, path: String, body: Data?) {
         lastMethod = method
         lastPath = path
+        lastBody = body
         callCount += 1
         pathCounts[path, default: 0] += 1
     }
@@ -55,7 +57,7 @@ private struct ComposeStubTransport: APIClientTransport {
     var confirmOutcome: ConfirmOutcome = .success
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        await recorder?.record(method: request.httpMethod ?? "GET", path: request.url?.path ?? "")
+        await recorder?.record(method: request.httpMethod ?? "GET", path: request.url?.path ?? "", body: request.httpBody)
         let url = request.url!
         let path = url.path
 
@@ -551,5 +553,52 @@ final class ComposeRecadoViewModelTests: XCTestCase {
 
         XCTAssertEqual(sut.stagedPhotos.first?.uploadState, .failed, "chave recusada no confirm volta pro estado failed")
         XCTAssertEqual(sut.errorMessage, JKCopy.muralComposePhotoUploadPartialFailure)
+    }
+
+    // MARK: setMentions(_:) (plano 02-06 Task 2)
+
+    func testSetMentionsWithThreeMembersSendsAllThreeUserIDsOnSubmit() async {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Com menção")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        let sut = ComposeRecadoViewModel(mode: .new, apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Com menção"
+        let mentions = [
+            MentionDTO(userID: UUID(), displayName: "Ana"),
+            MentionDTO(userID: UUID(), displayName: "Bruno"),
+            MentionDTO(userID: UUID(), displayName: "Carla"),
+        ]
+        sut.setMentions(mentions)
+
+        await sut.submit { _ in }
+
+        let body = await recorder.lastBody
+        let decoded = try? JSONDecoder().decode(CreateRecadoRequest.self, from: body ?? Data())
+        XCTAssertEqual(Set(decoded?.mentionedUserIDs ?? []), Set(mentions.map(\.userID)))
+        XCTAssertEqual(decoded?.mentionedUserIDs.count, 3)
+    }
+
+    func testSetMentionsWithEmptyArrayDoesNotChangeCanSubmit() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Sem menção"
+        let canSubmitBefore = sut.canSubmit
+
+        sut.setMentions([])
+
+        XCTAssertEqual(sut.canSubmit, canSubmitBefore, "marcar é sempre opcional (D-01/D-05) — não afeta canSubmit")
+    }
+
+    func testSelectedMentionsSurviveAGenericSubmitFailure() async {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(mode: .new, apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Vai falhar"
+        let mentions = [MentionDTO(userID: UUID(), displayName: "Ana")]
+        sut.setMentions(mentions)
+
+        await sut.submit { _ in }
+
+        XCTAssertEqual(sut.errorMessage, JKCopy.muralComposeGenericPublishError)
+        XCTAssertEqual(sut.selectedMentions.map(\.userID), mentions.map(\.userID), "a seleção de menção não se perde junto com o erro")
     }
 }

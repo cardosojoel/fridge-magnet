@@ -61,6 +61,10 @@ final class ComposeRecadoViewModel {
     private(set) var isSubmitting = false
     private(set) var errorMessage: String?
     private(set) var stagedPhotos: [StagedPhoto] = []
+    /// Membros marcados nesta sessão de compose, na ordem em que foram selecionados
+    /// (`MentionPickerView`, plano 02-06 Task 2) — sempre um `MentionDTO.userID` real (D-06),
+    /// nunca texto livre.
+    private(set) var selectedMentions: [MentionDTO] = []
 
     private let apiClient: APIClient
     private let photoUploadService: PhotoUploadService
@@ -130,6 +134,12 @@ final class ComposeRecadoViewModel {
         stagedPhotos.removeAll { $0.id == id }
     }
 
+    /// Substitui o conjunto de menções pelo devolvido por `MentionPickerView` — não altera
+    /// `canSubmit` (D-01/D-05: marcar é sempre opcional).
+    func setMentions(_ mentions: [MentionDTO]) {
+        selectedMentions = mentions
+    }
+
     /// Guarda de "já em voo" (mesma disciplina de `MuralFeedViewModel.loadNextPage()`):
     /// `submit()` chamado duas vezes em concorrência dispara exatamente uma chamada de rede.
     /// Nunca limpa `text` num erro — a pessoa não perde o que digitou. Sequência obrigatória
@@ -146,11 +156,16 @@ final class ComposeRecadoViewModel {
 
         do {
             let recado: RecadoDTO
+            let mentionedUserIDs = selectedMentions.map(\.userID)
             switch mode {
             case .new:
-                recado = try await apiClient.createRecado(CreateRecadoRequest(text: text))
+                recado = try await apiClient.createRecado(
+                    CreateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs)
+                )
             case .editing(let recadoID):
-                recado = try await apiClient.updateRecado(id: recadoID, UpdateRecadoRequest(text: text))
+                recado = try await apiClient.updateRecado(
+                    id: recadoID, UpdateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs)
+                )
             }
             lastKnownRecadoID = recado.id
 

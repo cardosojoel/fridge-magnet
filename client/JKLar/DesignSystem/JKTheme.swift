@@ -22,6 +22,11 @@ enum JKLayout {
     /// Altura mínima de linha da lista de membros da casa, para caber avatar + nome +
     /// `JKRoleBadge` sem violar `minTapTarget` na área de toque da linha.
     static let memberRowMinHeight: CGFloat = 56
+    /// Lado da miniatura de foto anexada no compose (plano 02-06) — não fixado pelo
+    /// `02-UI-SPEC.md` (só descreve o carrossel publicado, não o tamanho da miniatura em
+    /// edição); tamanho adotado por conveniência de leiaute até uma fase futura de
+    /// design revisar, mesmo raciocínio já documentado para `JKCopy.appName`.
+    static let stagedPhotoThumbnailSize: CGFloat = 96
     static let cardCornerRadius: CGFloat = 16
     static let controlCornerRadius: CGFloat = 12
     static let sheetCornerRadius: CGFloat = 28
@@ -97,6 +102,12 @@ enum JKCopy {
     /// `<files>` do plano 01-07, mas necessária para o gate de grep contra string solta em
     /// `Text(` (ver deviations do plano 01-07).
     static let retryButtonLabel = "Tentar de novo"
+    /// Não é linha do Copywriting Contract (nem o `01-UI-SPEC.md` nem o `02-UI-SPEC.md` fixam
+    /// uma cópia própria para "confirmar seleção e fechar a folha") — usado pelo botão de
+    /// concluir do `MentionPickerView` (plano 02-06), mesmo raciocínio já documentado para
+    /// `JKCopy.appName`/`loginTagline`: cópia genérica reusável, adotada até uma fase futura
+    /// de marketing/copy revisar.
+    static let doneButtonLabel = "Concluir"
 
     // MARK: - Onboarding (plano 01-07, D-02/D-04)
 
@@ -245,6 +256,11 @@ enum JKCopy {
     /// String exata do Copywriting Contract (linha "Compose — photo upload partial
     /// failure").
     static let muralComposePhotoUploadPartialFailure = "Uma ou mais fotos não foram enviadas. Tente novamente."
+    /// Não é linha própria do Copywriting Contract (a tabela só define a mensagem de falha
+    /// parcial acima, não o rótulo por miniatura) — citada em prosa no `02-UI-SPEC.md` §UI
+    /// Considerations ("photo-carousel" | error: "'Falha no envio' label"), então o texto é
+    /// verbatim dali. Mostrado na sobreposição de retentativa de cada miniatura que falhou.
+    static let muralComposePhotoUploadFailedLabel = "Falha no envio"
     /// Não é linha do Copywriting Contract (a tabela do `02-UI-SPEC.md` não cobre o caso de
     /// editar um recado que deixou de ser seu, ex.: sessão trocada) — plano 02-05 Task 3
     /// exige uma mensagem específica para `.apiError(.notAuthor)` na edição, distinta da
