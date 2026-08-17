@@ -4,6 +4,7 @@ import CryptoExtras
 import Fluent
 import FluentSQL
 import Foundation
+import JKLarShared
 import JWT
 import Vapor
 import XCTVapor
@@ -118,10 +119,79 @@ enum TestSupport {
             fatalError("Banco owner não é um SQLDatabase — não é possível truncar as tabelas de teste")
         }
         try await sql.raw("""
-            TRUNCATE TABLE refresh_tokens, household_invites, device_tokens, household_members,
-                households, linked_identities, users
+            TRUNCATE TABLE refresh_tokens, household_invites, device_tokens,
+                recado_mentions, recado_comments, recado_reactions, recado_photos, recados,
+                household_members, households, linked_identities, users
             RESTART IDENTITY CASCADE
             """).run()
+    }
+
+    // MARK: Plano 02-01 — mural de recados
+
+    /// Cria uma casa com `count` membros (1 admin + `count - 1` adultos), todos entrando por
+    /// convite real (mesma rota que a produção usa, nunca um atalho que grava linhas direto
+    /// no banco). Único helper novo em `TestSupport` desta fase — os planos 02-02, 02-03 e
+    /// 02-04 põem os próprios auxiliares como métodos privados da própria classe de teste
+    /// (convenção já usada por `DeviceTokenTests`).
+    static func makeHouseholdWithMembers(
+        app: Application,
+        count: Int
+    ) async throws -> (household: HouseholdDTO, members: [(userID: UUID, token: String)]) {
+        precondition(count >= 1, "makeHouseholdWithMembers exige pelo menos 1 membro (o admin)")
+
+        let adminUser = try await createTestUser(app: app, displayName: "Admin")
+        let adminID = try adminUser.requireID()
+        let adminToken = try await makeAccessToken(app: app, userID: adminID)
+
+        var capturedHousehold: HouseholdDTO?
+        try await app.testable().test(
+            .POST, "/api/v1/households",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                try req.content.encode(CreateHouseholdRequest(name: "Casa de Teste"), as: .json)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                XCTAssertEqual(res.status, .created)
+                capturedHousehold = try res.content.decode(HouseholdDTO.self)
+            }
+        )
+        let household = try XCTUnwrap(capturedHousehold)
+
+        var members: [(userID: UUID, token: String)] = [(adminID, adminToken)]
+
+        for index in 1..<count {
+            var capturedInvite: InviteDTO?
+            try await app.testable().test(
+                .POST, "/api/v1/households/current/invites",
+                beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                },
+                afterResponse: { (res: XCTHTTPResponse) async throws in
+                    XCTAssertEqual(res.status, .created)
+                    capturedInvite = try res.content.decode(InviteDTO.self)
+                }
+            )
+            let invite = try XCTUnwrap(capturedInvite)
+
+            let memberUser = try await createTestUser(app: app, displayName: "Membro \(index)")
+            let memberID = try memberUser.requireID()
+            let memberToken = try await makeAccessToken(app: app, userID: memberID)
+
+            try await app.testable().test(
+                .POST, "/api/v1/households/join",
+                beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: memberToken)
+                    try req.content.encode(JoinHouseholdRequest(code: invite.code), as: .json)
+                },
+                afterResponse: { (res: XCTHTTPResponse) async throws in
+                    XCTAssertEqual(res.status, .ok)
+                }
+            )
+
+            members.append((memberID, memberToken))
+        }
+
+        return (household, members)
     }
 
     // MARK: Plano 01-02 — plano de tenant

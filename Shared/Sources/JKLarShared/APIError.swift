@@ -28,6 +28,19 @@ public enum APIErrorCode: String, Codable, Sendable {
     /// a si mesmo por esta rota. Sair tem rota própria (`DELETE .../membership`), que aplica
     /// a invariante de último admin em vez de escapar dela (plano 01-10).
     case cannotRemoveSelf
+    /// `PATCH /api/v1/recados/:id`, `DELETE /api/v1/recados/:id` (403) — quem não é o autor
+    /// tentou editar/apagar. Plano 02-01, D-03: sem exceção de moderação para admin.
+    case notAuthor
+    /// Corpo de `POST /api/v1/recados` ou `POST .../comments` que @menciona um `user_id` que
+    /// não é membro da casa do requisitante (422). Plano 02-02.
+    case notHouseholdMember
+    /// `POST /api/v1/recados/:id/photos/presign` além de 10 fotos no carrossel (400).
+    /// Plano 02-04, D-02.
+    case photoLimitExceeded
+    /// `POST /api/v1/recados/:id/photos/confirm` nomeando um objeto que ainda não existe no
+    /// bucket (409) — o confirm faz `HEAD` contra o armazenamento antes de gravar a linha.
+    /// Plano 02-04, 02-RESEARCH.md Pitfall 3.
+    case photoNotUploaded
 }
 
 /// Corpo de erro padrão devolvido por qualquer rota da API.

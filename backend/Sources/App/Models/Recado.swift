@@ -1,0 +1,235 @@
+import Fluent
+import Foundation
+
+/// Um recado do mural (MURAL-01, MURAL-05) — escopado por `household_id` sob RLS
+/// `ENABLE`+`FORCE` (`CreateRecadoSchema`), mesmo espírito de `households`/`device_tokens`.
+/// `text` é opcional (D-01: um recado pode ser só texto, só foto(s), ou os dois — a regra
+/// "texto OU foto" é do compose, não desta camada). `sequence` é o cursor monotônico de
+/// paginação (02-RESEARCH.md Pattern 1/Alternatives Considered), lido de
+/// `recados_sequence_seq` pelo controller antes do insert.
+final class Recado: Model, @unchecked Sendable {
+    static let schema = "recados"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Parent(key: "household_id")
+    var household: Household
+
+    @Parent(key: "author_id")
+    var author: User
+
+    @OptionalField(key: "text")
+    var text: String?
+
+    @Field(key: "sequence")
+    var sequence: Int64
+
+    @Timestamp(key: "created_at", on: .create)
+    var createdAt: Date?
+
+    @Timestamp(key: "updated_at", on: .update)
+    var updatedAt: Date?
+
+    init() {}
+
+    init(
+        id: UUID? = nil,
+        householdID: Household.IDValue,
+        authorID: User.IDValue,
+        text: String?,
+        sequence: Int64
+    ) {
+        self.id = id
+        self.$household.id = householdID
+        self.$author.id = authorID
+        self.text = text
+        self.sequence = sequence
+    }
+}
+
+/// Uma foto do carrossel de um recado (D-01, D-02 — até 10 por recado, validado na
+/// aplicação, não no schema). `object_key` é a chave opaca do objeto no armazenamento
+/// (`ObjectStorageClient`) — quem monta a chave e assina a URL de download é o
+/// `RecadoPhotoController` do plano 02-04; este modelo só guarda a referência.
+/// `unique(recado_id, position)` e `unique(object_key)` no schema garantem posição sem
+/// colisão dentro do carrossel e chave de objeto nunca reaproveitada.
+final class RecadoPhoto: Model, @unchecked Sendable {
+    static let schema = "recado_photos"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Parent(key: "household_id")
+    var household: Household
+
+    @Parent(key: "recado_id")
+    var recado: Recado
+
+    @Field(key: "object_key")
+    var objectKey: String
+
+    @Field(key: "position")
+    var position: Int
+
+    @Field(key: "content_type")
+    var contentType: String
+
+    @Field(key: "byte_size")
+    var byteSize: Int64
+
+    @Timestamp(key: "created_at", on: .create)
+    var createdAt: Date?
+
+    init() {}
+
+    init(
+        id: UUID? = nil,
+        householdID: Household.IDValue,
+        recadoID: Recado.IDValue,
+        objectKey: String,
+        position: Int,
+        contentType: String,
+        byteSize: Int64
+    ) {
+        self.id = id
+        self.$household.id = householdID
+        self.$recado.id = recadoID
+        self.objectKey = objectKey
+        self.position = position
+        self.contentType = contentType
+        self.byteSize = byteSize
+    }
+}
+
+/// Reação de um membro a um recado (D-07, D-07b) — `kind` guarda o `rawValue` cru do
+/// `ReactionKind` fechado de `JKLarShared`, string crua na coluna e validada pelo enum
+/// compartilhado na borda HTTP, igual a `DeviceToken.platform`/`environment`.
+/// `unique(recado_id, user_id)` no schema é a constraint de D-07b: uma reação ativa por
+/// pessoa por recado, trocar substitui em vez de acumular.
+final class RecadoReaction: Model, @unchecked Sendable {
+    static let schema = "recado_reactions"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Parent(key: "household_id")
+    var household: Household
+
+    @Parent(key: "recado_id")
+    var recado: Recado
+
+    @Parent(key: "user_id")
+    var user: User
+
+    @Field(key: "kind")
+    var kind: String
+
+    @Timestamp(key: "created_at", on: .create)
+    var createdAt: Date?
+
+    @Timestamp(key: "updated_at", on: .update)
+    var updatedAt: Date?
+
+    init() {}
+
+    init(
+        id: UUID? = nil,
+        householdID: Household.IDValue,
+        recadoID: Recado.IDValue,
+        userID: User.IDValue,
+        kind: String
+    ) {
+        self.id = id
+        self.$household.id = householdID
+        self.$recado.id = recadoID
+        self.$user.id = userID
+        self.kind = kind
+    }
+}
+
+/// Comentário em lista plana cronológica (D-08 — sem resposta aninhada/thread, sem coluna
+/// de comentário-pai por schema).
+final class RecadoComment: Model, @unchecked Sendable {
+    static let schema = "recado_comments"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Parent(key: "household_id")
+    var household: Household
+
+    @Parent(key: "recado_id")
+    var recado: Recado
+
+    @Parent(key: "author_id")
+    var author: User
+
+    @Field(key: "text")
+    var text: String
+
+    @Timestamp(key: "created_at", on: .create)
+    var createdAt: Date?
+
+    @Timestamp(key: "updated_at", on: .update)
+    var updatedAt: Date?
+
+    init() {}
+
+    init(
+        id: UUID? = nil,
+        householdID: Household.IDValue,
+        recadoID: Recado.IDValue,
+        authorID: User.IDValue,
+        text: String
+    ) {
+        self.id = id
+        self.$household.id = householdID
+        self.$recado.id = recadoID
+        self.$author.id = authorID
+        self.text = text
+    }
+}
+
+/// Uma @menção — marcação social sem estado (D-04), nunca uma tarefa com
+/// resolvido/pendente. Exatamente um pai (`recado` OU `comment`, nunca os dois, nunca
+/// nenhum — `CHECK recado_mentions_one_parent` no schema); a coluna do outro fica `nil`.
+/// D-09: uma menção dentro de um comentário usa `comment`, uma menção no recado em si usa
+/// `recado`.
+final class RecadoMention: Model, @unchecked Sendable {
+    static let schema = "recado_mentions"
+
+    @ID(key: .id)
+    var id: UUID?
+
+    @Parent(key: "household_id")
+    var household: Household
+
+    @OptionalParent(key: "recado_id")
+    var recado: Recado?
+
+    @OptionalParent(key: "comment_id")
+    var comment: RecadoComment?
+
+    @Parent(key: "mentioned_user_id")
+    var mentionedUser: User
+
+    @Timestamp(key: "created_at", on: .create)
+    var createdAt: Date?
+
+    init() {}
+
+    init(
+        id: UUID? = nil,
+        householdID: Household.IDValue,
+        recadoID: Recado.IDValue? = nil,
+        commentID: RecadoComment.IDValue? = nil,
+        mentionedUserID: User.IDValue
+    ) {
+        self.id = id
+        self.$household.id = householdID
+        self.$recado.id = recadoID
+        self.$comment.id = commentID
+        self.$mentionedUser.id = mentionedUserID
+    }
+}
