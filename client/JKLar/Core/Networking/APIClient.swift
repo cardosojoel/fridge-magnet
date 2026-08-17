@@ -28,6 +28,10 @@ enum APIClientError: Error, Equatable {
     case http(status: Int)
     /// O corpo da resposta não decodificou como o tipo esperado.
     case decoding
+    /// Resposta de erro com corpo `APIErrorResponse` decodificado — quem chamou consome
+    /// `APIErrorCode` tipado, nunca a `message` (que é só para exibição), e nunca um
+    /// `switch` em string (plano 01-09, T-09-04).
+    case apiError(APIErrorCode)
 }
 
 /// Cliente HTTP do JK Lar (D-09, D-10, D-12). `actor` para serializar renovações de 401
@@ -129,6 +133,45 @@ actor APIClient {
         guard response.statusCode == 204 else {
             throw APIClientError.http(status: response.statusCode)
         }
+    }
+
+    /// `POST /api/v1/households/current/invites` (plano 01-06, exposto ao cliente pela
+    /// primeira vez aqui) — só admin recebe 201; um não-admin recebe 403 (T-09-02,
+    /// `RequireRoleMiddleware` do servidor é a linha de defesa real, o botão escondido na
+    /// UI é só conveniência).
+    func createInvite() async throws -> InviteDTO {
+        let (data, response) = try await send(
+            path: "api/v1/households/current/invites", method: "POST", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 201 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+        return try Self.decode(InviteDTO.self, from: data)
+    }
+
+    /// `GET /api/v1/households/current/invites` — roda sob RLS na rota escopada; um
+    /// convite de outra casa não tem como chegar aqui (IDENT-05, T-09-03). Ordenado do mais
+    /// recente para o mais antigo pelo servidor.
+    func listInvites() async throws -> [InviteDTO] {
+        let (data, response) = try await send(
+            path: "api/v1/households/current/invites", method: "GET", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+        return try Self.decode([InviteDTO].self, from: data)
+    }
+
+    /// `POST /api/v1/households/join` (plano 01-06) — mapeia `APIErrorResponse.code` para
+    /// `APIClientError.apiError`, nunca deixa a UI ler a `message` do servidor: uma mudança
+    /// de texto no backend não pode alterar comportamento no cliente (T-09-04).
+    func joinHousehold(code: String) async throws -> HouseholdDTO {
+        let body = try Self.encoder.encode(JoinHouseholdRequest(code: code))
+        let (data, response) = try await send(path: "api/v1/households/join", method: "POST", body: body, requiresAuth: true)
+        guard response.statusCode == 200 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(HouseholdDTO.self, from: data)
     }
 
     /// `POST /api/v1/auth/logout` — D-11: o logout do servidor é o que vale. Sempre apaga o
@@ -239,5 +282,16 @@ actor APIClient {
         } catch {
             throw APIClientError.decoding
         }
+    }
+
+    /// Traduz um corpo de erro em `APIClientError.apiError(APIErrorCode)` quando o servidor
+    /// devolveu um `APIErrorResponse` reconhecível; cai para `.http(status:)` genérico só
+    /// quando o corpo não decodifica (ex.: erro de infraestrutura antes do roteamento
+    /// Vapor).
+    private static func typedError(from data: Data, fallbackStatus: Int) -> APIClientError {
+        guard let decoded = try? decoder.decode(APIErrorResponse.self, from: data) else {
+            return .http(status: fallbackStatus)
+        }
+        return .apiError(decoded.code)
     }
 }

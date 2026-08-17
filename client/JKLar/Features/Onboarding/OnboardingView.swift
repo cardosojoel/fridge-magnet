@@ -4,10 +4,11 @@ import SwiftUI
 /// Gate obrigatório de casa (D-02) — `RootView` só chega aqui em `.needsHousehold`, e este
 /// é o único destino desse estado (não existe navegação imperativa que o contorne).
 ///
-/// O seletor segmentado do 01-UI-SPEC.md tem os dois rótulos desde já: só o ramo "Criar
-/// casa" está ligado nesta fatia. O ramo "Entrar com código" leva a uma view própria ainda
-/// vazia (`JoinHouseholdPlaceholderView`), que o plano 01-09 preenche sem precisar redesenhar
-/// esta navegação.
+/// O seletor segmentado do 01-UI-SPEC.md tem os dois rótulos desde já: o ramo "Criar casa"
+/// (plano 01-07) e o ramo "Entrar com código" (`JoinByCodeView`, plano 01-09) — a segunda
+/// pessoa entra na casa por um código de convite ou por um link `jklar://join/<CODE>`, cujo
+/// código guardado em `DeepLinkRouter` é consumido aqui assim que este gate aparece de
+/// verdade, nunca antes (D-02).
 struct OnboardingView: View {
     private enum Mode: Hashable {
         case create
@@ -15,8 +16,10 @@ struct OnboardingView: View {
     }
 
     @Environment(SessionStore.self) private var sessionStore
+    @Environment(DeepLinkRouter.self) private var deepLinkRouter
     @State private var mode: Mode = .create
     @State private var viewModel = OnboardingViewModel()
+    @State private var joinViewModel = JoinByCodeViewModel()
 
     var body: some View {
         VStack(spacing: JKSpacing.lg) {
@@ -31,13 +34,28 @@ struct OnboardingView: View {
             case .create:
                 createHouseholdForm
             case .join:
-                JoinHouseholdPlaceholderView()
+                JoinByCodeView(viewModel: joinViewModel)
             }
 
             Spacer()
         }
         .padding(JKSpacing.lg)
         .jkGlassBackground()
+        .task {
+            applyPendingDeepLinkIfNeeded()
+        }
+        .onChange(of: deepLinkRouter.pendingJoinCode) { _, _ in
+            applyPendingDeepLinkIfNeeded()
+        }
+    }
+
+    /// Consome um código pendente de `jklar://join/<CODE>` (D-02): tanto no primeiro
+    /// aparecimento deste gate (link aberto antes do login) quanto num link aberto com o
+    /// app já rodando neste mesmo gate (`.onChange`, comportamento #6 da Task 1).
+    private func applyPendingDeepLinkIfNeeded() {
+        guard let code = deepLinkRouter.consumePendingJoinCode() else { return }
+        mode = .join
+        joinViewModel.prefill(code: code)
     }
 
     private var createHouseholdForm: some View {
@@ -96,21 +114,8 @@ struct OnboardingView: View {
     }
 }
 
-/// Ramo "Entrar com código" — destino próprio e vazio nesta fatia (D-02 exige que o gate
-/// tenha as duas saídas desde já, nunca um beco sem saída). O plano 01-09 assume a
-/// propriedade deste arquivo e preenche o formulário real de entrar por convite.
-private struct JoinHouseholdPlaceholderView: View {
-    var body: some View {
-        Text(JKCopy.onboardingJoinPlaceholder)
-            .font(JKTypography.body)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .padding(JKSpacing.lg)
-    }
-}
-
 #Preview {
     OnboardingView()
         .environment(SessionStore())
+        .environment(DeepLinkRouter())
 }

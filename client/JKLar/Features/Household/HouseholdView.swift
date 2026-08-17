@@ -1,17 +1,19 @@
 import JKLarShared
 import SwiftUI
 
-/// Tela da casa — nome e lista de membros (IDENT-03), com os três estados obrigatórios do
-/// 01-UI-SPEC.md: carregando (esqueleto), carregado (cópia no singular quando há 1 membro,
-/// nunca um estado vazio genérico) e erro (Tentar de novo inline, preservando a última lista
-/// boa quando houver uma).
+/// Tela da casa — nome e lista de membros (IDENT-03/IDENT-04/IDENT-05), com os três estados
+/// obrigatórios do 01-UI-SPEC.md: carregando (esqueleto), carregado (cópia no singular com 1
+/// membro, plural de 2 a 10, parando de crescer em 10 sem chrome especial) e erro (Tentar de
+/// novo inline, preservando a última lista boa quando houver uma).
 ///
-/// Nesta fatia a lista sempre tem exatamente 1 membro — o criador, com o selo de admin. A
-/// listagem real de 2 a 10 pessoas chega no plano 01-09, que herda esta view sem trocar a
-/// chamada de rede (`HouseholdViewModel` já busca a lista real de
-/// `GET /households/current/members`).
+/// O botão Convidar (plano 01-09) só renderiza quando `household.myRole == .admin` — isso é
+/// conveniência de UI (T-09-02), a linha de defesa real é o 403 do `RequireRoleMiddleware`
+/// no servidor (plano 01-06). `HouseholdViewModel` busca a lista real de
+/// `GET /households/current/members`, que já suporta 2–10 membros sem trocar a chamada de
+/// rede desde o plano 01-07.
 struct HouseholdView: View {
     @State private var viewModel = HouseholdViewModel()
+    @State private var isInviteSheetPresented = false
 
     var body: some View {
         ScrollView {
@@ -32,6 +34,9 @@ struct HouseholdView: View {
         .task {
             await viewModel.load()
         }
+        .sheet(isPresented: $isInviteSheetPresented) {
+            InviteSheet()
+        }
     }
 
     /// 3 linhas de esqueleto em `jkCardSurface` durante a carga inicial (01-UI-SPEC.md
@@ -48,10 +53,33 @@ struct HouseholdView: View {
 
     @ViewBuilder
     private func loadedContent(household: HouseholdDTO, members: [MemberDTO]) -> some View {
-        Text(household.name)
-            .font(JKTypography.display)
-            .lineLimit(1)
-            .truncationMode(.tail)
+        HStack(alignment: .firstTextBaseline) {
+            Text(household.name)
+                .font(JKTypography.display)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer()
+
+            // Conveniência de UI (T-09-02): esconder o botão não é a linha de defesa — o
+            // 403 do `RequireRoleMiddleware` no servidor é (plano 01-06). `myRole` sempre
+            // vem do que o servidor devolveu, nunca inferido no cliente.
+            if household.myRole == .admin {
+                Button {
+                    isInviteSheetPresented = true
+                } label: {
+                    Label(JKCopy.householdInviteCTA, systemImage: "person.badge.plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(JKColor.jkAccent)
+            }
+        }
+
+        // Zero-one-many (01-UI-SPEC.md "zero-one-many | member-list"): singular só com 1
+        // membro, plural cobre 2–10 sem mudar de cópia na fronteira de 10.
+        Text(members.count == 1 ? JKCopy.householdMemberCountSingular : JKCopy.householdMemberCountPlural(members.count))
+            .font(JKTypography.label)
+            .foregroundStyle(.secondary)
 
         // n=1: cópia no singular em vez de um estado vazio genérico (01-UI-SPEC.md
         // "zero-one-many | member-list") — a casa recém-criada sempre tem o criador como

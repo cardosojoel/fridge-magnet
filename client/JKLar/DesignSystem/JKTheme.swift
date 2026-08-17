@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// Escala de espaçamento do 01-UI-SPEC.md (§ Spacing Scale). Múltiplos de 4pt — nenhuma view
@@ -114,10 +115,20 @@ enum JKCopy {
     static let onboardingGenderPlaceholder = "Selecionar"
     static let onboardingCreateCTA = "Criar casa"
     static let onboardingCreateGenericError = "Não foi possível concluir. Tente de novo em instantes."
-    /// O ramo "Entrar com código" (plano 01-09) só precisa existir como destino nesta
-    /// fatia — D-02 exige que o seletor tenha os dois rótulos desde já, sem um beco sem
-    /// saída, mas o formulário de código em si é escopo do plano 01-09.
-    static let onboardingJoinPlaceholder = "Entrar com um código chega no próximo plano."
+    // MARK: - Entrar com código (plano 01-09, D-02/D-05)
+
+    static let onboardingCodeFieldPlaceholder = "Código de 6 dígitos"
+    static let onboardingJoinCTA = "Entrar"
+    /// String exata do Copywriting Contract (linha "Onboarding — invalid/expired code
+    /// error") — mesma mensagem para `inviteInvalid` e `inviteExpired`, a tela nunca
+    /// diferencia os dois motivos (T-09-04).
+    static let onboardingInvalidCodeError = "Esse código não é válido ou expirou. Confira com quem te convidou e tente de novo."
+    /// String **verbatim** do CONTEXT.md, cobrada por grep no verify da Task 1 — nunca
+    /// alterar mesmo por um caractere.
+    static let onboardingHouseholdFullError = "Esta casa já atingiu o limite de 10 membros."
+    /// Orientação complementar (linha "Onboarding — house-at-capacity error"), exibida
+    /// junto da mensagem verbatim acima, nunca concatenada nela.
+    static let onboardingHouseholdFullErrorDetail = "Peça pro admin remover alguém ou fale com quem te convidou."
 
     // MARK: - Household (plano 01-07)
 
@@ -125,4 +136,31 @@ enum JKCopy {
     static let householdSingleMemberBody = "Convide até 9 pessoas pra formar sua casa — toque em Convidar pra gerar um código ou link."
     static let householdLoadErrorMessage = "Não foi possível carregar os membros da casa."
     static let householdUnnamedMember = "Sem nome"
+
+    // MARK: - Convite e lista de membros (plano 01-09, IDENT-04/IDENT-05)
+
+    static let householdInviteCTA = "Convidar"
+    /// Cópia de zero-one-many (01-UI-SPEC.md "zero-one-many | member-list") — singular só
+    /// no caso de 1 membro; plural cobre 2–10 sem mudar na fronteira de 10.
+    static let householdMemberCountSingular = "1 membro"
+    static func householdMemberCountPlural(_ count: Int) -> String { "\(count) membros" }
+
+    /// Heading da folha de convite — string exata citada em 01-UI-SPEC.md § Typography
+    /// ("Heading → screen/section titles ('Criar casa', 'Convide sua família', ...)").
+    static let inviteSheetHeading = "Convide sua família"
+    static let inviteSheetShareCTA = "Compartilhar"
+    static let inviteSheetLoadErrorMessage = "Não foi possível gerar o convite."
+    /// Não faz parte do Copywriting Contract (nenhuma linha fixa a redação de expiração) —
+    /// cópia adotada até uma fase futura de marketing/copy a revisar, mesmo raciocínio já
+    /// documentado para `JKCopy.appName`/`loginTagline`.
+    static func inviteSheetExpiresLabel(_ date: Date) -> String {
+        "Expira em \(expiresDateFormatter.string(from: date))"
+    }
+
+    private static let expiresDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
 }
