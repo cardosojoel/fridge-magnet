@@ -2,23 +2,32 @@ import XCTest
 import JKLarShared
 @testable import JKLar
 
-/// Registrador simples de chamada (método + caminho) — usado só para o comportamento "modo
-/// edição chama a rota de atualização, nunca a de criação" precisar de uma prova mais forte
-/// do que o status HTTP devolvido. `actor` para poder ser lido de fora com segurança.
+/// Registrador simples de chamada (método + caminho) — usado tanto para o comportamento "modo
+/// edição chama a rota de atualização, nunca a de criação" quanto para contar chamadas por
+/// rota (presign/confirm) do plano 02-06 Task 1. `actor` para poder ser lido de fora com
+/// segurança.
 private actor CallRecorder {
     private(set) var lastMethod: String?
     private(set) var lastPath: String?
     private(set) var callCount = 0
+    private(set) var pathCounts: [String: Int] = [:]
 
     func record(method: String, path: String) {
         lastMethod = method
         lastPath = path
         callCount += 1
+        pathCounts[path, default: 0] += 1
+    }
+
+    func count(forSuffix suffix: String) -> Int {
+        pathCounts.reduce(0) { partial, entry in entry.key.hasSuffix(suffix) ? partial + entry.value : partial }
     }
 }
 
 /// Transporte falso, imediato — dono deste arquivo, sem estado compartilhado com stubs de
-/// outros arquivos de teste (mesmo padrão de `OnboardingStubTransport`).
+/// outros arquivos de teste (mesmo padrão de `OnboardingStubTransport`). Estendido no plano
+/// 02-06 Task 1 para também rotear `photos/presign` e `photos/confirm` (o compose de texto
+/// nunca chama essas rotas, então o roteamento é aditivo e não muda nenhum teste existente).
 private struct ComposeStubTransport: APIClientTransport {
     enum Outcome {
         case success(RecadoDTO, status: Int)
@@ -26,12 +35,37 @@ private struct ComposeStubTransport: APIClientTransport {
         case failure(status: Int)
     }
 
+    /// Resposta simulada de `POST .../photos/presign` — por padrão devolve uma URL assinada
+    /// (falsa) por slot pedido, prefixada por `objectKeyPrefix`.
+    enum PresignOutcome {
+        case success(objectKeyPrefix: String = "key")
+        case apiError(APIErrorCode, status: Int)
+    }
+
+    /// Resposta simulada de `POST .../photos/confirm` — por padrão devolve um `ConfirmedPhotoDTO`
+    /// por chave recebida no corpo.
+    enum ConfirmOutcome {
+        case success
+        case apiError(APIErrorCode, status: Int)
+    }
+
     let outcome: Outcome
     var recorder: CallRecorder?
+    var presignOutcome: PresignOutcome = .success(objectKeyPrefix: "key")
+    var confirmOutcome: ConfirmOutcome = .success
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         await recorder?.record(method: request.httpMethod ?? "GET", path: request.url?.path ?? "")
         let url = request.url!
+        let path = url.path
+
+        if path.hasSuffix("/photos/presign") {
+            return try encodePresign(request: request, url: url)
+        }
+        if path.hasSuffix("/photos/confirm") {
+            return try encodeConfirm(request: request, url: url)
+        }
+
         switch outcome {
         case .success(let recado, let status):
             let data = try JSONEncoder().encode(recado)
@@ -42,6 +76,61 @@ private struct ComposeStubTransport: APIClientTransport {
         case .failure(let status):
             return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
         }
+    }
+
+    private func encodePresign(request: URLRequest, url: URL) throws -> (Data, HTTPURLResponse) {
+        switch presignOutcome {
+        case .success(let prefix):
+            let body = try JSONDecoder().decode(PresignPhotoUploadRequest.self, from: request.httpBody ?? Data())
+            let uploads = body.slots.enumerated().map { index, _ in
+                PresignedPhotoUploadDTO(
+                    objectKey: "\(prefix)-\(index)",
+                    uploadURL: URL(string: "https://storage.example.com/\(prefix)-\(index)")!,
+                    expiresAt: Date().addingTimeInterval(600)
+                )
+            }
+            let data = try JSONEncoder().encode(PresignPhotoUploadResponse(uploads: uploads))
+            return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        case .apiError(let code, let status):
+            let data = try JSONEncoder().encode(APIErrorResponse(code: code, message: "erro de teste"))
+            return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
+        }
+    }
+
+    private func encodeConfirm(request: URLRequest, url: URL) throws -> (Data, HTTPURLResponse) {
+        switch confirmOutcome {
+        case .success:
+            let body = try JSONDecoder().decode(ConfirmPhotoUploadRequest.self, from: request.httpBody ?? Data())
+            let dtos = body.objectKeys.enumerated().map { index, _ in ConfirmedPhotoDTO(id: UUID(), position: index) }
+            let data = try JSONEncoder().encode(dtos)
+            return (data, HTTPURLResponse(url: url, statusCode: 201, httpVersion: nil, headerFields: nil)!)
+        case .apiError(let code, let status):
+            let data = try JSONEncoder().encode(APIErrorResponse(code: code, message: "erro de teste"))
+            return (data, HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
+        }
+    }
+}
+
+/// Transporte falso de envio de bytes (`PhotoUploadTransport`, não `APIClientTransport`) — cada
+/// chave cujo `objectKey` aparece em `failingObjectKeys` devolve 500 (foto que falha); as
+/// demais devolvem 200. O `objectKey` é lido do path da URL assinada (formato de teste
+/// `.../\(prefix)-\(index)`, ver `ComposeStubTransport.encodePresign`).
+private actor PhotoUploadOutcomeTransport: PhotoUploadTransport {
+    private let failingObjectKeys: Set<String>
+    private(set) var callCount = 0
+    private(set) var uploadedURLs: [URL] = []
+
+    init(failingObjectKeys: Set<String> = []) {
+        self.failingObjectKeys = failingObjectKeys
+    }
+
+    func upload(_ request: URLRequest, from data: Data) async throws -> HTTPURLResponse {
+        callCount += 1
+        let url = request.url!
+        uploadedURLs.append(url)
+        let objectKey = url.lastPathComponent
+        let statusCode = failingObjectKeys.contains(objectKey) ? 500 : 200
+        return HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
     }
 }
 
@@ -247,5 +336,220 @@ final class ComposeRecadoViewModelTests: XCTestCase {
 
         let callCount = await gated.callCount
         XCTAssertEqual(callCount, 1, "submit() concorrente dispara exatamente uma chamada de rede")
+    }
+
+    // MARK: addPhotos(_:) / teto de 10 (plano 02-06 Task 1)
+
+    private func makeInput(contentType: String = "image/jpeg") -> ComposeRecadoViewModel.StagedPhotoInput {
+        .init(data: Data("foto".utf8), contentType: contentType)
+    }
+
+    func testAddPhotosLeavesThreeItemsAllPendingWithCounter() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        sut.addPhotos([makeInput(), makeInput(), makeInput()])
+
+        XCTAssertEqual(sut.stagedPhotos.count, 3)
+        XCTAssertTrue(sut.stagedPhotos.allSatisfy { $0.uploadState == .pending })
+        XCTAssertEqual(sut.stagedPhotoCounterLabel, "3/10")
+    }
+
+    func testAddPhotosAtCapDisablesFurtherAdditionsAndShowsCapMessage() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        sut.addPhotos((0..<10).map { _ in makeInput() })
+
+        XCTAssertFalse(sut.canAddMorePhotos)
+        XCTAssertEqual(sut.photoCapMessage, JKCopy.muralComposePhotoCapReached)
+
+        sut.addPhotos([makeInput()])
+        XCTAssertEqual(sut.stagedPhotos.count, 10, "tentar anexar além do teto não acrescenta item")
+    }
+
+    // MARK: canSubmit com fotos (plano 02-06 Task 1)
+
+    func testCanSubmitFalseWhilePhotoPendingEvenWithText() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Com foto"
+
+        sut.addPhotos([makeInput()])
+
+        XCTAssertFalse(sut.canSubmit, "foto ainda pending bloqueia o envio, mesmo com texto preenchido")
+    }
+
+    func testCanSubmitTrueWithEmptyTextOnceAtLeastOnePhotoUploaded() async {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        let uploadTransport = PhotoUploadOutcomeTransport()
+        let sut = ComposeRecadoViewModel(
+            mode: .new,
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            photoUploadService: PhotoUploadService(transport: uploadTransport)
+        )
+        sut.text = ""
+        sut.addPhotos([makeInput()])
+
+        await sut.submit { _ in }
+
+        XCTAssertEqual(sut.stagedPhotos.first?.uploadState, .uploaded(objectKey: "key-0"))
+        XCTAssertTrue(sut.canSubmit, "texto vazio, mas 1 foto em uploaded já satisfaz a regra texto-ou-foto (D-01)")
+    }
+
+    func testCanSubmitFalseWithEmptyTextWhenAllPhotosFailed() async {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        // A própria foto ("key-0") é configurada para falhar no envio.
+        let uploadTransport = PhotoUploadOutcomeTransport(failingObjectKeys: ["key-0"])
+        let sut = ComposeRecadoViewModel(
+            mode: .new,
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            photoUploadService: PhotoUploadService(transport: uploadTransport)
+        )
+        sut.text = ""
+        sut.addPhotos([makeInput()])
+
+        await sut.submit { _ in }
+
+        XCTAssertEqual(sut.stagedPhotos.first?.uploadState, .failed)
+        XCTAssertFalse(sut.canSubmit, "texto vazio e a única foto falhou — nada satisfaz a regra texto-ou-foto")
+    }
+
+    // MARK: submit() com fotos — ordem e chamadas por rota (plano 02-06 Task 1)
+
+    func testSubmitWithTwoPhotosCallsCreatePresignUploadThenConfirmInOrder() async {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Duas fotos")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        let uploadTransport = PhotoUploadOutcomeTransport()
+        let sut = ComposeRecadoViewModel(
+            mode: .new,
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            photoUploadService: PhotoUploadService(transport: uploadTransport)
+        )
+        sut.text = "Duas fotos"
+        sut.addPhotos([makeInput(), makeInput()])
+
+        await sut.submit { _ in }
+
+        let recadoCalls = await recorder.count(forSuffix: "/api/v1/recados")
+        let presignCalls = await recorder.count(forSuffix: "/photos/presign")
+        let confirmCalls = await recorder.count(forSuffix: "/photos/confirm")
+        XCTAssertEqual(recadoCalls, 1, "cria o recado exatamente uma vez")
+        XCTAssertEqual(presignCalls, 1, "um presign pedindo os 2 slots de uma vez, não um por foto")
+        XCTAssertEqual(confirmCalls, 1, "um confirm com as 2 chaves, não um por foto")
+        let uploadCallCount = await uploadTransport.callCount
+        XCTAssertEqual(uploadCallCount, 2, "cada foto é enviada individualmente pro armazenamento")
+        XCTAssertEqual(sut.stagedPhotos.map(\.uploadState), [.uploaded(objectKey: "key-0"), .uploaded(objectKey: "key-1")])
+    }
+
+    func testSubmitWithOneOfThreePhotosFailingUploadsOthersAndConfirmsOnlySuccessfulKeys() async {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Três fotos")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        // A foto do meio ("key-1") falha; as outras duas sobem normalmente.
+        let uploadTransport = PhotoUploadOutcomeTransport(failingObjectKeys: ["key-1"])
+        let sut = ComposeRecadoViewModel(
+            mode: .new,
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            photoUploadService: PhotoUploadService(transport: uploadTransport)
+        )
+        sut.text = "Três fotos"
+        sut.addPhotos([makeInput(), makeInput(), makeInput()])
+
+        await sut.submit { _ in }
+
+        XCTAssertEqual(sut.stagedPhotos[0].uploadState, .uploaded(objectKey: "key-0"))
+        XCTAssertEqual(sut.stagedPhotos[1].uploadState, .failed)
+        XCTAssertEqual(sut.stagedPhotos[2].uploadState, .uploaded(objectKey: "key-2"))
+        XCTAssertEqual(sut.errorMessage, JKCopy.muralComposePhotoUploadPartialFailure, "a falha nunca é silenciosa")
+
+        // Confirm só recebeu as 2 chaves que subiram — provado pelo corpo capturado no
+        // transporte, via decodificação do request mais recente à rota de confirm.
+        let confirmCalls = await recorder.count(forSuffix: "/photos/confirm")
+        XCTAssertEqual(confirmCalls, 1)
+    }
+
+    // MARK: retryUpload(photoID:) (plano 02-06 Task 1)
+
+    func testRetryUploadOnFailedPhotoRedoesPresignAndUploadForThatPhotoOnly() async {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Retry")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        let uploadTransport = PhotoUploadOutcomeTransport(failingObjectKeys: ["key-0"])
+        let sut = ComposeRecadoViewModel(
+            mode: .new,
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            photoUploadService: PhotoUploadService(transport: uploadTransport)
+        )
+        sut.text = "Retry"
+        sut.addPhotos([makeInput()])
+        await sut.submit { _ in }
+        guard let photoID = sut.stagedPhotos.first?.id, sut.stagedPhotos.first?.uploadState == .failed else {
+            return XCTFail("pré-condição: esperava failed antes da retentativa")
+        }
+        let presignCallsBeforeRetry = await recorder.count(forSuffix: "/photos/presign")
+        let uploadCallsBeforeRetry = await uploadTransport.callCount
+
+        await sut.retryUpload(photoID: photoID)
+
+        let presignCallsAfterRetry = await recorder.count(forSuffix: "/photos/presign")
+        let uploadCallsAfterRetry = await uploadTransport.callCount
+        XCTAssertEqual(presignCallsAfterRetry, presignCallsBeforeRetry + 1, "retryUpload refaz o presign")
+        XCTAssertEqual(uploadCallsAfterRetry, uploadCallsBeforeRetry + 1, "retryUpload refaz o envio, só desta foto")
+        XCTAssertEqual(sut.stagedPhotos.count, 1, "nenhuma foto extra foi criada pela retentativa")
+    }
+
+    // MARK: Erros tipados do presign/confirm (plano 02-06 Task 1)
+
+    func testPresignRejectedWithPhotoLimitExceededShowsCapMessageAndAttemptsNoUpload() async {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Cheio")
+        let transport = ComposeStubTransport(
+            outcome: .success(created, status: 201),
+            recorder: recorder,
+            presignOutcome: .apiError(.photoLimitExceeded, status: 400)
+        )
+        let uploadTransport = PhotoUploadOutcomeTransport()
+        let sut = ComposeRecadoViewModel(
+            mode: .new,
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            photoUploadService: PhotoUploadService(transport: uploadTransport)
+        )
+        sut.text = "Cheio"
+        sut.addPhotos([makeInput()])
+
+        await sut.submit { _ in }
+
+        XCTAssertEqual(sut.errorMessage, JKCopy.muralComposePhotoCapReached)
+        let uploadCallCount = await uploadTransport.callCount
+        XCTAssertEqual(uploadCallCount, 0, "presign recusado nunca tenta nenhum envio")
+    }
+
+    func testConfirmRejectedWithPhotoNotUploadedMarksThoseFilesFailedAndShowsPartialFailure() async {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Confirm falha")
+        let transport = ComposeStubTransport(
+            outcome: .success(created, status: 201),
+            recorder: recorder,
+            confirmOutcome: .apiError(.photoNotUploaded, status: 409)
+        )
+        let uploadTransport = PhotoUploadOutcomeTransport()
+        let sut = ComposeRecadoViewModel(
+            mode: .new,
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            photoUploadService: PhotoUploadService(transport: uploadTransport)
+        )
+        sut.text = "Confirm falha"
+        sut.addPhotos([makeInput()])
+
+        await sut.submit { _ in }
+
+        XCTAssertEqual(sut.stagedPhotos.first?.uploadState, .failed, "chave recusada no confirm volta pro estado failed")
+        XCTAssertEqual(sut.errorMessage, JKCopy.muralComposePhotoUploadPartialFailure)
     }
 }
