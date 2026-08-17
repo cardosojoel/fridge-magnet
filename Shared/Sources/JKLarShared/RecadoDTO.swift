@@ -253,3 +253,33 @@ public struct RecadoReactionSummaryDTO: Codable, Sendable {
     }
 }
 
+/// Corpo de `POST /api/v1/recados/:recadoID/comments`.
+///
+/// Deliberadamente não carrega `authorId` nem `householdId` (mesmo motivo de
+/// `DeviceRegistrationRequest`/`CreateRecadoRequest`): ambos resolvidos no servidor a partir
+/// do JWT verificado e do contexto de sessão. `mentionedUserIDs` usa o mesmo seletor
+/// estruturado do recado (D-06) — marcar dentro de um comentário notifica pelo mesmo
+/// mecanismo do recado (D-09).
+public struct CreateCommentRequest: Codable, Sendable {
+    public var text: String
+    public var mentionedUserIDs: [UUID]
+
+    public init(text: String, mentionedUserIDs: [UUID] = []) {
+        self.text = text
+        self.mentionedUserIDs = mentionedUserIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case mentionedUserIDs
+    }
+
+    // Mesma razão de CreateRecadoRequest.init(from:): mentionedUserIDs ausente no JSON
+    // decodifica como [], não como erro.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.text = try container.decode(String.self, forKey: .text)
+        self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
+    }
+}
+

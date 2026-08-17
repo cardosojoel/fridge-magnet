@@ -24,6 +24,12 @@ struct RecadoController: RouteCollection {
     /// megabytes.
     static let maxTextLength = 20000
 
+    /// Guarda de tamanho de request para o texto de comentário — comentário não tem limite de
+    /// UX fixado em nenhuma decisão, e 5000 é ordens de magnitude acima do uso real (mesmo
+    /// espírito de `maxTextLength`, teto menor por ser um campo obrigatório e mais curto por
+    /// natureza).
+    static let maxCommentTextLength = 5000
+
     /// Quantos comentários mais recentes o card do feed mostra (02-UI-SPEC.md).
     static let latestCommentsLimit = 2
 
@@ -45,6 +51,8 @@ struct RecadoController: RouteCollection {
         // o cliente aplica um toggle otimista que pode reenviar.
         scoped.put(":recadoID", "reactions", use: setReaction)
         scoped.delete(":recadoID", "reactions", use: clearReaction)
+        scoped.get(":recadoID", "comments", use: comments)
+        scoped.post(":recadoID", "comments", use: createComment)
     }
 
     // MARK: POST /api/v1/recados
@@ -412,6 +420,113 @@ struct RecadoController: RouteCollection {
         return Response(status: .noContent)
     }
 
+    // MARK: GET /api/v1/recados/:recadoID/comments
+
+    @Sendable
+    func comments(req: Request) async throws -> Response {
+        guard req.householdContext != nil else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        _ = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
+
+        // Lista inteira, sem paginação (D-08, 02-UI-SPEC.md §UI Considerations não tem linha
+        // de "carregar mais" para comment-list): `.limit(200)` existe só como guarda de
+        // tamanho de resposta, não como recurso de navegação.
+        let rows = try await RecadoComment.query(on: req.scopedDB)
+            .filter(\.$recado.$id == recadoID)
+            .with(\.$author)
+            .sort(\.$createdAt, .ascending)
+            .limit(200)
+            .all()
+
+        var dtos: [CommentDTO] = []
+        dtos.reserveCapacity(rows.count)
+        for comment in rows {
+            dtos.append(try await Self.buildCommentDTO(comment: comment, requesterID: userID, on: req.scopedDB))
+        }
+
+        return try Self.jsonResponse(dtos, status: .ok)
+    }
+
+    // MARK: POST /api/v1/recados/:recadoID/comments
+
+    @Sendable
+    func createComment(req: Request) async throws -> Response {
+        guard let context = req.householdContext else {
+            throw Abort(.forbidden)
+        }
+        let user = try req.auth.require(User.self)
+        let userID = try user.requireID()
+
+        guard
+            let recadoIDRaw = req.parameters.get("recadoID"),
+            let recadoID = UUID(uuidString: recadoIDRaw)
+        else {
+            return try Self.errorResponse(code: .validation, message: "recadoID inválido.", status: .badRequest)
+        }
+
+        _ = try await Self.loadRecadoOrNotFound(recadoID, on: req.scopedDB)
+
+        let body = try req.content.decode(CreateCommentRequest.self)
+        let trimmedText = body.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else {
+            return try Self.errorResponse(
+                code: .validation, message: "O texto do comentário não pode ser vazio.", status: .badRequest
+            )
+        }
+        guard trimmedText.count <= Self.maxCommentTextLength else {
+            return try Self.errorResponse(
+                code: .validation,
+                message: "O texto do comentário excede o tamanho máximo permitido.",
+                status: .badRequest
+            )
+        }
+
+        // Validação de menção ANTES de qualquer gravação — mesmo contrato de
+        // create(recado): um id fora da casa recusa o comentário inteiro, nada é persistido.
+        let mentionedUserIDs: [UUID]
+        do {
+            mentionedUserIDs = try await Self.resolveHouseholdMemberUserIDs(body.mentionedUserIDs, on: req.scopedDB)
+        } catch is MentionValidationError {
+            return try Self.errorResponse(
+                code: .notHouseholdMember,
+                message: "Um ou mais pessoas marcadas não pertencem a esta casa.",
+                status: .unprocessableEntity
+            )
+        }
+
+        let comment = RecadoComment(
+            householdID: context.householdID,
+            recadoID: recadoID,
+            authorID: userID,
+            text: trimmedText
+        )
+        try await comment.save(on: req.scopedDB)
+        let commentID = try comment.requireID()
+
+        for mentionedUserID in mentionedUserIDs {
+            let mention = RecadoMention(
+                householdID: context.householdID,
+                commentID: commentID,
+                mentionedUserID: mentionedUserID
+            )
+            try await mention.save(on: req.scopedDB)
+        }
+
+        let dto = try await Self.buildCommentDTO(comment: comment, requesterID: userID, on: req.scopedDB)
+        return try Self.jsonResponse(dto, status: .created)
+    }
+
     // MARK: Mapeamento Recado → RecadoDTO
 
     /// Preenche todos os campos consultando de verdade `recado_photos`, `recado_mentions`,
@@ -465,23 +580,7 @@ struct RecadoController: RouteCollection {
 
         var latestComments: [CommentDTO] = []
         for comment in latestCommentRows.reversed() {
-            let commentID = try comment.requireID()
-            let commentMentionRows = try await RecadoMention.query(on: database)
-                .filter(\.$comment.$id == commentID)
-                .with(\.$mentionedUser)
-                .all()
-            let commentMentions = commentMentionRows.map {
-                MentionDTO(userID: $0.$mentionedUser.id, displayName: $0.mentionedUser.displayName)
-            }
-            latestComments.append(CommentDTO(
-                id: commentID,
-                authorID: comment.$author.id,
-                authorDisplayName: comment.author.displayName,
-                text: comment.text,
-                mentions: commentMentions,
-                createdAt: comment.createdAt ?? Date(),
-                isMine: comment.$author.id == requesterID
-            ))
+            latestComments.append(try await Self.buildCommentDTO(comment: comment, requesterID: requesterID, on: database))
         }
 
         return RecadoDTO(
@@ -499,6 +598,44 @@ struct RecadoController: RouteCollection {
             myReaction: reactionSummary.myReaction,
             commentCount: commentCount,
             latestComments: latestComments
+        )
+    }
+
+    // MARK: Mapeamento RecadoComment → CommentDTO
+
+    /// Carrega as menções do comentário e monta o `CommentDTO` — reusado por `comments`,
+    /// `createComment` e `buildDTO` (prévia de `latestComments`) para os três caminhos nunca
+    /// divergirem sobre a forma de um comentário.
+    private static func buildCommentDTO(
+        comment: RecadoComment,
+        requesterID: UUID,
+        on database: any Database
+    ) async throws -> CommentDTO {
+        let commentID = try comment.requireID()
+
+        let authorDisplayName: String?
+        if comment.$author.value != nil {
+            authorDisplayName = comment.author.displayName
+        } else {
+            authorDisplayName = try await User.find(comment.$author.id, on: database)?.displayName
+        }
+
+        let mentionRows = try await RecadoMention.query(on: database)
+            .filter(\.$comment.$id == commentID)
+            .with(\.$mentionedUser)
+            .all()
+        let mentions = mentionRows.map {
+            MentionDTO(userID: $0.$mentionedUser.id, displayName: $0.mentionedUser.displayName)
+        }
+
+        return CommentDTO(
+            id: commentID,
+            authorID: comment.$author.id,
+            authorDisplayName: authorDisplayName,
+            text: comment.text,
+            mentions: mentions,
+            createdAt: comment.createdAt ?? Date(),
+            isMine: comment.$author.id == requesterID
         )
     }
 
