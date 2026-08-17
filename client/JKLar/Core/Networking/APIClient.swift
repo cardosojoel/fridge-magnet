@@ -174,6 +174,31 @@ actor APIClient {
         return try Self.decode(HouseholdDTO.self, from: data)
     }
 
+    /// `DELETE /api/v1/households/current/members/:memberID` (plano 01-10) — admin-only no
+    /// servidor (RequireRoleMiddleware([.admin])); mapeia lastAdmin/cannotRemoveSelf para
+    /// APIClientError.apiError, mesma tradução tipada de joinHousehold (T-09-04/T-10-07). Um
+    /// não-admin recebe .http(status: 403) — nenhum código tipado esperado para esse caminho,
+    /// já que a tela nunca deveria chamar isto sem `canRemove(_:)` ter sido verdadeiro.
+    func removeMember(id: UUID) async throws {
+        let (data, response) = try await send(
+            path: "api/v1/households/current/members/\(id.uuidString)", method: "DELETE", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 204 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+    }
+
+    /// `DELETE /api/v1/households/current/membership` (plano 01-10) — auto-serviço, qualquer
+    /// papel pode sair; `lastAdmin` é o único código de erro tipado esperado aqui.
+    func leaveHousehold() async throws {
+        let (data, response) = try await send(
+            path: "api/v1/households/current/membership", method: "DELETE", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 204 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+    }
+
     /// `POST /api/v1/auth/logout` — D-11: o logout do servidor é o que vale. Sempre apaga o
     /// Keychain local, mesmo que a chamada de rede falhe (o dispositivo não deve continuar
     /// achando que está logado só porque a rede caiu no momento do logout).

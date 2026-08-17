@@ -69,6 +69,15 @@ final class SessionStore {
         state = .signedOut
     }
 
+    /// Chamado por `HouseholdViewModel.leaveHousehold()` depois que o servidor confirma a
+    /// saída (204) — reconfirma o estado da casa no mesmo caminho que `hydrate()`/`signIn()`
+    /// usam (`GET /households/current`, agora sem casa) e deriva `.needsHousehold` a partir
+    /// disso. Sem navegação imperativa: `RootView` só reflete `state`, o mesmo estado
+    /// derivado estabelecido no plano 01-07 (D-02).
+    func refreshHouseholdState() async {
+        await resolveHouseholdState(fallbackHadHousehold: false)
+    }
+
     private func resolveHouseholdState(fallbackHadHousehold: Bool) async {
         do {
             if let household = try await apiClient.currentHousehold() {

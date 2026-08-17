@@ -11,92 +11,175 @@ import SwiftUI
 /// no servidor (plano 01-06). `HouseholdViewModel` busca a lista real de
 /// `GET /households/current/members`, que já suporta 2–10 membros sem trocar a chamada de
 /// rede desde o plano 01-07.
+///
+/// Plano 01-10 (IDENT-06, segunda ação): remover membro (admin-only, `swipeActions` na linha
+/// + `contextMenu` equivalente para macOS, onde não há swipe) e sair da casa (linha
+/// destrutiva no rodapé, qualquer papel). A tela precisou virar um `List` — `.swipeActions`
+/// só funciona em linhas de `List`, não em `ScrollView`/`VStack` — mas cada linha continua
+/// sendo um `JKCard` sobre Material, com o chrome padrão de lista escondido
+/// (`.listRowSeparator`/`.listRowBackground`), para manter o visual estabelecido pelos planos
+/// 01-07/01-09.
 struct HouseholdView: View {
+    @Environment(SessionStore.self) private var sessionStore
     @State private var viewModel = HouseholdViewModel()
     @State private var isInviteSheetPresented = false
+    @State private var isLeaveConfirmationPresented = false
+    @State private var memberPendingRemoval: MemberDTO?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: JKSpacing.md) {
-                switch viewModel.state {
-                case .loading:
-                    loadingSkeleton
-                case .loaded(let household, let members):
-                    loadedContent(household: household, members: members)
-                case .error(let message, let lastGood):
-                    errorContent(message: message, lastGood: lastGood)
-                }
+        List {
+            switch viewModel.state {
+            case .loading:
+                loadingSkeleton
+            case .loaded(let household, let members):
+                loadedContent(household: household, members: members)
+            case .error(let message, let lastGood):
+                errorContent(message: message, lastGood: lastGood)
             }
-            .padding(JKSpacing.lg)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let actionErrorMessage = viewModel.actionErrorMessage {
+                Text(actionErrorMessage)
+                    .font(JKTypography.label)
+                    .foregroundStyle(JKColor.jkDestructive)
+                    .plainRow()
+            }
+
+            // "Sair da casa" (01-UI-SPEC.md): linha destrutiva no rodapé, visível para
+            // qualquer papel — não depende de `myRole`.
+            Button(role: .destructive) {
+                isLeaveConfirmationPresented = true
+            } label: {
+                Text(JKCopy.householdLeaveRowLabel)
+            }
+            .tint(JKColor.jkDestructive)
+            .plainRow()
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
         .jkGlassBackground()
         .task {
+            viewModel.sessionStore = sessionStore
             await viewModel.load()
         }
         .sheet(isPresented: $isInviteSheetPresented) {
             InviteSheet()
+        }
+        .confirmationDialog(
+            JKCopy.householdLeaveRowLabel,
+            isPresented: $isLeaveConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button(JKCopy.householdLeaveConfirmButton, role: .destructive) {
+                Task { await viewModel.leaveHousehold() }
+            }
+            Button(JKCopy.cancelButtonLabel, role: .cancel) {}
+        } message: {
+            Text(JKCopy.householdLeaveConfirmMessage)
+        }
+        .confirmationDialog(
+            JKCopy.householdRemoveActionLabel,
+            isPresented: Binding(
+                get: { memberPendingRemoval != nil },
+                set: { isPresented in
+                    if !isPresented { memberPendingRemoval = nil }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let member = memberPendingRemoval {
+                Button(JKCopy.householdRemoveConfirmButton, role: .destructive) {
+                    let target = member
+                    memberPendingRemoval = nil
+                    Task { await viewModel.removeMember(target) }
+                }
+                Button(JKCopy.cancelButtonLabel, role: .cancel) {
+                    memberPendingRemoval = nil
+                }
+            }
+        } message: {
+            if let member = memberPendingRemoval {
+                Text(JKCopy.householdRemoveConfirmMessage(member.displayName ?? JKCopy.householdUnnamedMember))
+            }
         }
     }
 
     /// 3 linhas de esqueleto em `jkCardSurface` durante a carga inicial (01-UI-SPEC.md
     /// "loading | member-list").
     private var loadingSkeleton: some View {
-        VStack(spacing: JKSpacing.sm) {
-            ForEach(0..<3, id: \.self) { _ in
-                RoundedRectangle(cornerRadius: JKLayout.cardCornerRadius, style: .continuous)
-                    .fill(.regularMaterial)
-                    .frame(height: JKLayout.memberRowMinHeight)
-            }
+        ForEach(0..<3, id: \.self) { _ in
+            RoundedRectangle(cornerRadius: JKLayout.cardCornerRadius, style: .continuous)
+                .fill(.regularMaterial)
+                .frame(height: JKLayout.memberRowMinHeight)
+                .plainRow()
         }
     }
 
     @ViewBuilder
     private func loadedContent(household: HouseholdDTO, members: [MemberDTO]) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(household.name)
-                .font(JKTypography.display)
-                .lineLimit(1)
-                .truncationMode(.tail)
+        householdHeader(household: household, members: members)
+            .plainRow()
 
-            Spacer()
-
-            // Conveniência de UI (T-09-02): esconder o botão não é a linha de defesa — o
-            // 403 do `RequireRoleMiddleware` no servidor é (plano 01-06). `myRole` sempre
-            // vem do que o servidor devolveu, nunca inferido no cliente.
-            if household.myRole == .admin {
-                Button {
-                    isInviteSheetPresented = true
-                } label: {
-                    Label(JKCopy.householdInviteCTA, systemImage: "person.badge.plus")
+        ForEach(members, id: \.id) { member in
+            memberRow(member)
+                .plainRow()
+                .swipeActions(edge: .trailing) {
+                    if viewModel.canRemove(member) {
+                        removeActionButton(for: member)
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(JKColor.jkAccent)
-            }
+                .contextMenu {
+                    if viewModel.canRemove(member) {
+                        removeActionButton(for: member)
+                    }
+                }
         }
+    }
 
-        // Zero-one-many (01-UI-SPEC.md "zero-one-many | member-list"): singular só com 1
-        // membro, plural cobre 2–10 sem mudar de cópia na fronteira de 10.
-        Text(members.count == 1 ? JKCopy.householdMemberCountSingular : JKCopy.householdMemberCountPlural(members.count))
-            .font(JKTypography.label)
-            .foregroundStyle(.secondary)
+    /// Nome da casa + botão Convidar (admin-only) + contagem/estado de único membro — tudo
+    /// junto numa única linha de `List`, já que nenhum destes elementos precisa de
+    /// `swipeActions`/`contextMenu` individual.
+    @ViewBuilder
+    private func householdHeader(household: HouseholdDTO, members: [MemberDTO]) -> some View {
+        VStack(alignment: .leading, spacing: JKSpacing.md) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(household.name)
+                    .font(JKTypography.display)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
-        // n=1: cópia no singular em vez de um estado vazio genérico (01-UI-SPEC.md
-        // "zero-one-many | member-list") — a casa recém-criada sempre tem o criador como
-        // único membro nesta fatia.
-        if members.count <= 1 {
-            VStack(alignment: .leading, spacing: JKSpacing.xs) {
-                Text(JKCopy.householdSingleMemberHeading)
-                    .font(JKTypography.heading)
-                Text(JKCopy.householdSingleMemberBody)
-                    .font(JKTypography.label)
-                    .foregroundStyle(.secondary)
+                Spacer()
+
+                // Conveniência de UI (T-09-02): esconder o botão não é a linha de defesa — o
+                // 403 do `RequireRoleMiddleware` no servidor é (plano 01-06). `myRole`
+                // sempre vem do que o servidor devolveu, nunca inferido no cliente.
+                if household.myRole == .admin {
+                    Button {
+                        isInviteSheetPresented = true
+                    } label: {
+                        Label(JKCopy.householdInviteCTA, systemImage: "person.badge.plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(JKColor.jkAccent)
+                }
             }
-        }
 
-        VStack(spacing: JKSpacing.sm) {
-            ForEach(members, id: \.id) { member in
-                memberRow(member)
+            // Zero-one-many (01-UI-SPEC.md "zero-one-many | member-list"): singular só com 1
+            // membro, plural cobre 2–10 sem mudar de cópia na fronteira de 10.
+            Text(members.count == 1 ? JKCopy.householdMemberCountSingular : JKCopy.householdMemberCountPlural(members.count))
+                .font(JKTypography.label)
+                .foregroundStyle(.secondary)
+
+            // n=1: cópia no singular em vez de um estado vazio genérico (01-UI-SPEC.md
+            // "zero-one-many | member-list") — a casa recém-criada sempre tem o criador como
+            // único membro nesta fatia.
+            if members.count <= 1 {
+                VStack(alignment: .leading, spacing: JKSpacing.xs) {
+                    Text(JKCopy.householdSingleMemberHeading)
+                        .font(JKTypography.heading)
+                    Text(JKCopy.householdSingleMemberBody)
+                        .font(JKTypography.label)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -121,6 +204,17 @@ struct HouseholdView: View {
         }
     }
 
+    /// Compartilhado por `swipeActions` e `contextMenu` — mesma ação, dois pontos de entrada
+    /// (01-UI-SPEC.md "the ação de remover aparece por swipeActions ... e também no
+    /// contextMenu, para o macOS onde não há swipe").
+    private func removeActionButton(for member: MemberDTO) -> some View {
+        Button(role: .destructive) {
+            memberPendingRemoval = member
+        } label: {
+            Label(JKCopy.householdRemoveActionLabel, systemImage: "person.badge.minus")
+        }
+    }
+
     private func monogram(for displayName: String?) -> some View {
         let initial = displayName?.trimmingCharacters(in: .whitespaces).first.map(String.init)?.uppercased() ?? "?"
         return Text(initial)
@@ -131,7 +225,9 @@ struct HouseholdView: View {
 
     /// Erro de carga com Tentar de novo inline — preserva a última lista boa (nome +
     /// membros) quando uma já existia, em vez de trocar a tela inteira por um banner de
-    /// erro (01-UI-SPEC.md "error | member-list").
+    /// erro (01-UI-SPEC.md "error | member-list"). A lista de última-boa fica só leitura
+    /// (sem swipe/contextMenu — `canRemove(_:)` já devolve falso fora de `.loaded`, dado que
+    /// os dados podem estar desatualizados durante o erro).
     @ViewBuilder
     private func errorContent(
         message: String,
@@ -151,6 +247,7 @@ struct HouseholdView: View {
             }
             .font(JKTypography.body)
         }
+        .plainRow()
     }
 }
 
@@ -167,6 +264,17 @@ private extension MemberRole {
     }
 }
 
+private extension View {
+    /// Esconde o chrome padrão de linha de `List` (separador + fundo) — cada linha desta
+    /// tela já traz o próprio fundo (`JKCard`/Material) ou é um bloco de texto solto sobre o
+    /// `jkGlassBackground()` da tela inteira.
+    func plainRow() -> some View {
+        listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+    }
+}
+
 #Preview {
     HouseholdView()
+        .environment(SessionStore())
 }

@@ -163,4 +163,33 @@ enum JKCopy {
         formatter.timeStyle = .none
         return formatter
     }()
+
+    // MARK: - Sair da casa / remover membro (plano 01-10, IDENT-06)
+
+    /// Rótulo genérico de cancelamento não-destrutivo, compartilhado pelos dois diálogos
+    /// abaixo (01-UI-SPEC.md § Copywriting Contract, "Cancel: 'Cancelar'" em ambas as linhas).
+    static let cancelButtonLabel = "Cancelar"
+
+    /// Rótulo da linha destrutiva no rodapé da tela — visível para qualquer papel — e título
+    /// do diálogo que ela abre.
+    static let householdLeaveRowLabel = "Sair da casa"
+    /// String exata do Copywriting Contract (linha "Destructive — 'Sair da casa'").
+    static let householdLeaveConfirmMessage = "Sair da casa? Você perde acesso aos recados, agenda e remédios dessa casa até ser convidado de novo."
+    static let householdLeaveConfirmButton = "Sair"
+
+    /// Rótulo curto da ação de remover — usado no `swipeActions`/`contextMenu` da linha (o
+    /// nome já está na própria linha, não precisa repetir ali) e como botão de confirmação do
+    /// diálogo (01-UI-SPEC.md, "Confirm: 'Remover'").
+    static let householdRemoveActionLabel = "Remover"
+    static let householdRemoveConfirmButton = "Remover"
+    /// String exata do Copywriting Contract, com o nome interpolado (linha "Destructive —
+    /// 'Remover membro' (admin only)").
+    static func householdRemoveConfirmMessage(_ name: String) -> String {
+        "Remover \(name) da casa? Essa pessoa perde acesso imediatamente e precisa de um novo convite pra voltar."
+    }
+
+    /// String exata do Copywriting Contract (linha "Destructive — last-admin block") —
+    /// mostrada inline quando o servidor recusa uma saída/remoção com `lastAdmin`, sem
+    /// navegar para fora da tela e sem descartar a lista carregada.
+    static let householdLastAdminBlockMessage = "Você é o único admin da casa. Promova outra pessoa a admin antes de sair."
 }

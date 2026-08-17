@@ -69,18 +69,26 @@ public struct JoinHouseholdRequest: Codable, Sendable {
 
 /// Um membro da casa do requisitante, para `GET /api/v1/households/current/members`.
 /// `id` é o id da linha de `household_members` (não o `user.id`) — é o mesmo valor usado
-/// como `memberID` em `PATCH .../members/:memberID/role`.
+/// como `memberID` em `PATCH .../members/:memberID/role` e em
+/// `DELETE .../members/:memberID` (plano 01-10).
 public struct MemberDTO: Codable, Sendable {
     public var id: UUID
     public var displayName: String?
     public var role: MemberRole
     public var joinedAt: Date
+    /// Verdadeiro só na linha do próprio requisitante — sempre computado no servidor
+    /// (comparação de `user.id`), nunca inferido no cliente por nome ou posição na lista.
+    /// Plano 01-10: é o que permite `HouseholdViewModel.canRemove(_:)` esconder a ação de
+    /// remover na própria linha sem depender de um heurístico do lado do cliente (nomes
+    /// duplicados na mesma casa não são impossíveis).
+    public var isSelf: Bool
 
-    public init(id: UUID, displayName: String?, role: MemberRole, joinedAt: Date) {
+    public init(id: UUID, displayName: String?, role: MemberRole, joinedAt: Date, isSelf: Bool) {
         self.id = id
         self.displayName = displayName
         self.role = role
         self.joinedAt = joinedAt
+        self.isSelf = isSelf
     }
 }
 
