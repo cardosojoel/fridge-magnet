@@ -192,4 +192,17 @@ enum JKCopy {
     /// mostrada inline quando o servidor recusa uma saída/remoção com `lastAdmin`, sem
     /// navegar para fora da tela e sem descartar a lista carregada.
     static let householdLastAdminBlockMessage = "Você é o único admin da casa. Promova outra pessoa a admin antes de sair."
+
+    // MARK: - Primer de notificação (plano 01-12, D-13/D-14)
+
+    /// As quatro linhas exatas do Copywriting Contract (01-UI-SPEC.md, "Notification
+    /// primer — heading/body/primary CTA/secondary/dismiss"), mais a linha de
+    /// reasseguramento pós-recusa ("Notification primer — post-deny reassurance").
+    static let notificationPrimerHeading = "Ative as notificações"
+    static let notificationPrimerBody = "Assim você fica sabendo na hora quando alguém te menciona, manda um recado ou é sua vez de tomar remédio."
+    static let notificationPrimerPrimaryCTA = "Ativar notificações"
+    static let notificationPrimerSecondaryCTA = "Agora não"
+    /// D-14: recusar (secundário ou prompt do sistema) nunca bloqueia nada — só reassegura
+    /// que dá pra reativar depois, sem insistência.
+    static let notificationPrimerReassurance = "Sem problema — você pode ativar isso depois em Ajustes."
 }
