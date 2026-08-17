@@ -154,30 +154,30 @@ final class MuralFeedViewModel {
         items.last?.id == id
     }
 
-    /// Alternância otimista de reação (D-07/D-07b, plano 02-07) — reusada por
-    /// `RecadoDetailViewModel` para o detalhe e o feed nunca divergirem na semântica de
-    /// substituição. Aplica o otimismo local ANTES da chamada de rede resolver, chama
-    /// `setReaction`/`clearReaction` conforme o emoji já ativo ou não, substitui o resumo
-    /// local pelo do servidor no sucesso, e reverte à cópia guardada na falha — nunca deixa a
-    /// interface mostrando um estado que o servidor recusou.
+    /// Alternância otimista de reação (D-07/D-07b, plano 02-07) — repassa para `ReactionOptimism`
+    /// (declarado em `RecadoDetailViewModel.swift`, reusado por ambos), para o detalhe e o
+    /// feed nunca divergirem na semântica de substituição. Aplica o otimismo local ANTES da
+    /// chamada de rede resolver, substitui o resumo local pelo do servidor no sucesso, e
+    /// reverte à cópia guardada na falha — nunca deixa a interface mostrando um estado que o
+    /// servidor recusou.
     func toggleReaction(recadoID: UUID, kind: ReactionKind) async {
         actionErrorMessage = nil
         guard let index = items.firstIndex(where: { $0.id == recadoID }) else { return }
         let previousReactions = items[index].reactions
         let previousMyReaction = items[index].myReaction
 
-        applyOptimisticReaction(kind, at: index)
+        let optimistic = ReactionOptimism.applyToggle(
+            reactions: previousReactions, myReaction: previousMyReaction, tapped: kind
+        )
+        items[index].reactions = optimistic.reactions
+        items[index].myReaction = optimistic.myReaction
+        state = .loaded(items: items)
 
         do {
-            if previousMyReaction == kind {
-                let summary = try await apiClient.clearReaction(recadoID: recadoID)
-                applyReactionSummary(
-                    summary ?? RecadoReactionSummaryDTO(reactions: [], myReaction: nil), toRecadoID: recadoID
-                )
-            } else {
-                let summary = try await apiClient.setReaction(recadoID: recadoID, kind: kind)
-                applyReactionSummary(summary, toRecadoID: recadoID)
-            }
+            let summary = try await ReactionOptimism.resolve(
+                recadoID: recadoID, kind: kind, previousMyReaction: previousMyReaction, apiClient: apiClient
+            )
+            applyReactionSummary(summary, toRecadoID: recadoID)
         } catch {
             guard let revertIndex = items.firstIndex(where: { $0.id == recadoID }) else { return }
             items[revertIndex].reactions = previousReactions
@@ -195,44 +195,6 @@ final class MuralFeedViewModel {
         items[index].reactions = summary.reactions
         items[index].myReaction = summary.myReaction
         state = .loaded(items: items)
-    }
-
-    /// Alternar para `kind` quando já é `myReaction` limpa; alternar para um `kind` diferente
-    /// substitui a anterior (D-07b, nunca acumula), ajustando as contagens localmente:
-    /// decrementa a que saiu, incrementa a que entrou.
-    private func applyOptimisticReaction(_ kind: ReactionKind, at index: Int) {
-        var reactions = items[index].reactions
-        let previousReaction = items[index].myReaction
-
-        if previousReaction == kind {
-            Self.decrementCount(for: kind, in: &reactions)
-            items[index].myReaction = nil
-        } else {
-            if let previousReaction {
-                Self.decrementCount(for: previousReaction, in: &reactions)
-            }
-            Self.incrementCount(for: kind, in: &reactions)
-            items[index].myReaction = kind
-        }
-
-        items[index].reactions = reactions
-        state = .loaded(items: items)
-    }
-
-    private static func decrementCount(for kind: ReactionKind, in reactions: inout [ReactionCountDTO]) {
-        guard let idx = reactions.firstIndex(where: { $0.kind == kind }) else { return }
-        reactions[idx].count = max(0, reactions[idx].count - 1)
-        if reactions[idx].count == 0 {
-            reactions.remove(at: idx)
-        }
-    }
-
-    private static func incrementCount(for kind: ReactionKind, in reactions: inout [ReactionCountDTO]) {
-        if let idx = reactions.firstIndex(where: { $0.kind == kind }) {
-            reactions[idx].count += 1
-        } else {
-            reactions.append(ReactionCountDTO(kind: kind, count: 1))
-        }
     }
 
     private var currentGood: [RecadoDTO]? {
