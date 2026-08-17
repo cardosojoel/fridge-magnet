@@ -29,7 +29,13 @@ struct HouseholdView: View {
     @State private var editNameDraft = ""
 
     var body: some View {
-        List {
+        // Contêiner de navegação (plano 02-12, `<planner_assumptions>` item 1): a linha
+        // "Arquivados" do contrato é uma linha de navegação padrão com chevron, e nenhum
+        // contêiner de navegação existia no app — sem ele, a linha não teria para onde
+        // empurrar a tela. A barra de navegação da raiz fica visível por padrão; escondê-la
+        // é o ajuste previsto no checkpoint de verificação humana, caso incomode.
+        NavigationStack {
+            List {
             switch viewModel.state {
             case .loading:
                 loadingSkeleton
@@ -55,7 +61,7 @@ struct HouseholdView: View {
             }
             .tint(JKColor.jkDestructive)
             .plainRow()
-        }
+            }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .jkGlassBackground()
@@ -113,6 +119,7 @@ struct HouseholdView: View {
             }
             Button(JKCopy.cancelButtonLabel, role: .cancel) {}
         }
+        }
     }
 
     /// 3 linhas de esqueleto em `jkCardSurface` durante a carga inicial (01-UI-SPEC.md
@@ -144,6 +151,22 @@ struct HouseholdView: View {
                         removeActionButton(for: member)
                     }
                 }
+        }
+
+        // Linha "Arquivados" (D-15, plano 02-12) — exatamente o mesmo gate visual do botão
+        // Convidar acima: esconder é conveniência, a defesa real é o 403 do middleware de
+        // papel no servidor para as duas rotas de arquivados (plano 02-11). Não-admin não
+        // vê linha nenhuma: nem desabilitada, nem com texto explicativo (convenção de
+        // silêncio na ausência).
+        if household.myRole == .admin {
+            NavigationLink {
+                ArchivedRecadosView()
+            } label: {
+                Label(JKCopy.householdArchivedRowLabel, systemImage: "archivebox")
+                    .font(JKTypography.body)
+                    .frame(minHeight: JKLayout.memberRowMinHeight)
+            }
+            .plainRow()
         }
     }
 
