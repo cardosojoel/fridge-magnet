@@ -372,14 +372,27 @@ final class ComposeRecadoViewModelTests: XCTestCase {
 
     // MARK: canSubmit com fotos (plano 02-06 Task 1)
 
-    func testCanSubmitFalseWhilePhotoPendingEvenWithText() {
+    func testCanSubmitTrueWhilePhotoPendingWithText() {
         let transport = ComposeStubTransport(outcome: .failure(status: 500))
         let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
         sut.text = "Com foto"
 
         sut.addPhotos([makeInput()])
 
-        XCTAssertFalse(sut.canSubmit, "foto ainda pending bloqueia o envio, mesmo com texto preenchido")
+        XCTAssertTrue(
+            sut.canSubmit,
+            "foto pending nunca bloqueia o envio — é o estado de toda foto recém-anexada e só o submit() a resolve (deadlock de 2026-08-17)"
+        )
+    }
+
+    func testCanSubmitTrueWithEmptyTextAndPendingPhoto() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = ""
+
+        sut.addPhotos([makeInput()])
+
+        XCTAssertTrue(sut.canSubmit, "foto pending conta para a regra texto-ou-foto (D-01) — o submit() é quem a envia")
     }
 
     func testCanSubmitTrueWithEmptyTextOnceAtLeastOnePhotoUploaded() async {

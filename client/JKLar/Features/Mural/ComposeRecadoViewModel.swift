@@ -85,23 +85,28 @@ final class ComposeRecadoViewModel {
         JKCopy.muralComposePhotoCounter(stagedPhotos.count)
     }
 
-    /// Regra completa de D-01: `!isSubmitting`, nenhuma foto ainda em `pending`/`uploading`, e
-    /// (texto não vazio **ou** ao menos uma foto em `uploaded`). Marcar alguém nunca entra
-    /// nesta conta — menção é sempre opcional (D-01/D-05).
+    /// Regra completa de D-01: `!isSubmitting`, nenhuma foto com envio **em voo**
+    /// (`uploading`, só possível durante um `retryUpload` fora do `submit`), e (texto não
+    /// vazio **ou** ao menos uma foto aproveitável — `pending`, que o próprio `submit()` vai
+    /// enviar, ou `uploaded`). `pending` NUNCA bloqueia: é o estado de toda foto recém-anexada,
+    /// e só o `submit()` a tira dele — bloquear `pending` deixaria o botão Postar desabilitado
+    /// para sempre com qualquer foto anexada (deadlock real visto no primeiro teste com foto,
+    /// 2026-08-17). Marcar alguém nunca entra nesta conta — menção é sempre opcional
+    /// (D-01/D-05).
     var canSubmit: Bool {
-        guard !isSubmitting, !hasPhotosStillResolving else { return false }
+        guard !isSubmitting, !hasUploadInFlight else { return false }
         let hasText = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let hasUploadedPhoto = stagedPhotos.contains { if case .uploaded = $0.uploadState { true } else { false } }
-        return hasText || hasUploadedPhoto
-    }
-
-    private var hasPhotosStillResolving: Bool {
-        stagedPhotos.contains { photo in
+        let hasUsablePhoto = stagedPhotos.contains { photo in
             switch photo.uploadState {
-            case .pending, .uploading: true
-            case .uploaded, .failed: false
+            case .pending, .uploaded: true
+            case .uploading, .failed: false
             }
         }
+        return hasText || hasUsablePhoto
+    }
+
+    private var hasUploadInFlight: Bool {
+        stagedPhotos.contains { $0.uploadState == .uploading }
     }
 
     init(
