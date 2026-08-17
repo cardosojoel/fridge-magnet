@@ -106,6 +106,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(CreateRefreshTokens(), to: .owner)
     app.migrations.add(CreateHouseholdInvites(), to: .owner)
     app.migrations.add(CreateDeviceTokens(), to: .owner)
+    app.migrations.add(CreateRecadoSchema(), to: .owner)
     try await app.autoMigrate().get()
 
     // MARK: Assinatura JWT — ES256, chave carregada do ambiente.
@@ -191,6 +192,7 @@ func configure(_ app: Application) async throws {
     try app.register(collection: AuthController())
     try app.register(collection: HouseholdController())
     try app.register(collection: DeviceController())
+    try app.register(collection: RecadoController())
     // `POST /api/v1/dev/push-test` só existe em desenvolvimento — ausência de rota, não
     // checagem em runtime (T-11-04, ver `DeviceController.registerDevRoutes`).
     if app.environment == .development {
