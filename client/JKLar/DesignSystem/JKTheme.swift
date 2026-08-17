@@ -245,6 +245,12 @@ enum JKCopy {
     /// String exata do Copywriting Contract (linha "Compose — photo upload partial
     /// failure").
     static let muralComposePhotoUploadPartialFailure = "Uma ou mais fotos não foram enviadas. Tente novamente."
+    /// Não é linha do Copywriting Contract (a tabela do `02-UI-SPEC.md` não cobre o caso de
+    /// editar um recado que deixou de ser seu, ex.: sessão trocada) — plano 02-05 Task 3
+    /// exige uma mensagem específica para `.apiError(.notAuthor)` na edição, distinta da
+    /// genérica de publicação. Cópia adotada até uma fase futura de marketing/copy revisar,
+    /// mesmo raciocínio já documentado para `JKCopy.appName`/`loginTagline`.
+    static let muralComposeNotAuthorError = "Você não pode mais editar este recado."
 
     /// String exata do Copywriting Contract (linha "Mention picker sheet title") — também a
     /// cópia do botão que abre a folha (ver `muralComposeMentionPickerTrigger` acima).

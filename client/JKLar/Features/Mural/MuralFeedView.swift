@@ -6,17 +6,17 @@ import SwiftUI
 /// falha-ao-carregar-mais. `List`, nunca a dupla scroll-container+pilha do plano 01-10 (mesmo
 /// motivo: pull-to-refresh e o gatilho de rolagem infinita só existem nativos em `List`).
 ///
-/// O FAB de compose e os pontos de entrada de editar/apagar já existem aqui desde esta
-/// task (Task 2 do plano 02-05) — a ligação real com `ComposeRecadoView` (que ainda não
-/// existe neste ponto do plano) e a rota de apagar chegam na Task 3, no mesmo arquivo.
+/// FAB de compose (modo novo) e menu de overflow de `RecadoCard` (Editar → modo edição,
+/// Apagar → `deleteRecado` seguido de `reloadFromTop()`) ligados à folha real de
+/// `ComposeRecadoView` desde a Task 3 do plano 02-05.
 struct MuralFeedView: View {
     @State private var viewModel = MuralFeedViewModel()
     @State private var isComposePresented = false
     @State private var editingRecado: RecadoDTO?
-    /// Só a ação "Apagar" do menu de overflow (ligada na Task 3) passa por aqui —
-    /// `MuralFeedViewModel` não expõe um método de apagar (fora do `<files>` da Task 3 do
-    /// plano, que não volta a tocar `MuralFeedViewModel.swift`), então a chamada mora nesta
-    /// view, sempre seguida de `viewModel.reloadFromTop()` em caso de sucesso.
+    /// Só a ação "Apagar" do menu de overflow passa por aqui — `MuralFeedViewModel` não
+    /// expõe um método de apagar (fora do `<files>` da Task 3 do plano, que não volta a
+    /// tocar `MuralFeedViewModel.swift`), então a chamada mora nesta view, sempre seguida de
+    /// `viewModel.reloadFromTop()` em caso de sucesso.
     private let apiClient = APIClient()
 
     var body: some View {
@@ -47,6 +47,26 @@ struct MuralFeedView: View {
         }
         .overlay(alignment: .bottomTrailing) {
             composeFAB
+        }
+        .sheet(isPresented: $isComposePresented) {
+            composeSheet
+        }
+    }
+
+    /// Modo novo quando `editingRecado` é `nil` (FAB), modo edição quando não é (item
+    /// "Editar" do menu de overflow, com o texto atual pré-preenchido). No sucesso: modo
+    /// novo insere localmente o recado no topo do feed sem recarregar; modo edição recarrega
+    /// a primeira página, já que o cartão editado pode não ser mais o primeiro.
+    @ViewBuilder
+    private var composeSheet: some View {
+        if let editingRecado {
+            ComposeRecadoView(mode: .editing(recadoID: editingRecado.id), initialText: editingRecado.text ?? "") { _ in
+                Task { await viewModel.reloadFromTop() }
+            }
+        } else {
+            ComposeRecadoView(mode: .new) { recado in
+                viewModel.insertLocally(recado)
+            }
         }
     }
 
