@@ -42,6 +42,11 @@ final class MuralFeedViewModel {
     /// papel de `HouseholdViewModel.actionErrorMessage`: uma reação que falhou não pode
     /// esvaziar a lista de recados da tela.
     private(set) var actionErrorMessage: String?
+    /// Qual recado `actionErrorMessage` descreve (Rule 2 — funcionalidade crítica ausente do
+    /// texto do plano): sem isto, `RecadoCard` não teria como saber SE a mensagem é sobre o
+    /// próprio cartão ou sobre outro, e mostraria "Não foi possível reagir" pendurado embaixo
+    /// de todos os cartões da lista ao mesmo tempo em vez de só naquele que o toque errou.
+    private(set) var actionErrorRecadoID: UUID?
 
     private var nextCursor: Int64?
     /// Guarda de concorrência: `loadNextPage()` chamado duas vezes ao mesmo tempo dispara
@@ -162,6 +167,7 @@ final class MuralFeedViewModel {
     /// servidor recusou.
     func toggleReaction(recadoID: UUID, kind: ReactionKind) async {
         actionErrorMessage = nil
+        actionErrorRecadoID = nil
         guard let index = items.firstIndex(where: { $0.id == recadoID }) else { return }
         let previousReactions = items[index].reactions
         let previousMyReaction = items[index].myReaction
@@ -184,6 +190,7 @@ final class MuralFeedViewModel {
             items[revertIndex].myReaction = previousMyReaction
             state = .loaded(items: items)
             actionErrorMessage = JKCopy.muralReactionErrorMessage
+            actionErrorRecadoID = recadoID
         }
     }
 
