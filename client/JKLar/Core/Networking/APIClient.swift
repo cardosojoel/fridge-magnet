@@ -223,6 +223,60 @@ actor APIClient {
         }
     }
 
+    /// `GET /api/v1/recados` (plano 02-05, consumindo o `RecadoController.feed` do plano
+    /// 02-01) — paginação por cursor (`sequence`, nunca deslocamento numérico): `cursor` só
+    /// entra na query string quando presente, e o cliente guarda/reenvia exatamente o valor
+    /// que o servidor devolveu em `RecadoFeedPage.nextCursor`, sem calcular posição. Sem
+    /// ramo de erro tipado com significado para a interface (feed nunca distingue motivo de
+    /// falha), por isso `.http(status:)` cru em vez de `Self.typedError(...)`.
+    func feed(cursor: Int64?) async throws -> RecadoFeedPage {
+        var path = "api/v1/recados"
+        if let cursor {
+            path += "?cursor=\(cursor)"
+        }
+        let (data, response) = try await send(path: path, method: "GET", body: nil, requiresAuth: true)
+        guard response.statusCode == 200 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+        return try Self.decode(RecadoFeedPage.self, from: data)
+    }
+
+    /// `POST /api/v1/recados` (plano 02-05, `RecadoController.create` do plano 02-01) —
+    /// `authorId`/`householdId` nunca fazem parte de `CreateRecadoRequest`, sempre resolvidos
+    /// no servidor a partir do JWT/contexto (zero-trust, `.claude/CLAUDE.md`).
+    func createRecado(_ request: CreateRecadoRequest) async throws -> RecadoDTO {
+        let body = try Self.encoder.encode(request)
+        let (data, response) = try await send(path: "api/v1/recados", method: "POST", body: body, requiresAuth: true)
+        guard response.statusCode == 201 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(RecadoDTO.self, from: data)
+    }
+
+    /// `PATCH /api/v1/recados/:id` (plano 02-05) — só o autor edita (D-03); um `.apiError(.notAuthor)`
+    /// é o modo de falha tipado que a UI precisa distinguir da mensagem genérica.
+    func updateRecado(id: UUID, _ request: UpdateRecadoRequest) async throws -> RecadoDTO {
+        let body = try Self.encoder.encode(request)
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(id.uuidString)", method: "PATCH", body: body, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(RecadoDTO.self, from: data)
+    }
+
+    /// `DELETE /api/v1/recados/:id` (plano 02-05) — só o autor apaga (D-03), mesmo modo de
+    /// falha tipado de `updateRecado`.
+    func deleteRecado(id: UUID) async throws {
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(id.uuidString)", method: "DELETE", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 204 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+    }
+
     /// `POST /api/v1/auth/logout` — D-11: o logout do servidor é o que vale. Sempre apaga o
     /// Keychain local, mesmo que a chamada de rede falhe (o dispositivo não deve continuar
     /// achando que está logado só porque a rede caiu no momento do logout).
@@ -311,7 +365,16 @@ actor APIClient {
         body: Data?,
         accessToken: String?
     ) -> URLRequest {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        // `URL.appendingPathComponent(_:)` trata `path` como um único segmento opaco e
+        // percent-encoda `?`/`=`/`&` — quebra silenciosamente qualquer rota com query string
+        // (ex.: `feed(cursor:)`, plano 02-05, primeira chamada deste arquivo a montar uma).
+        // `URL(string:relativeTo:)` resolve `path` como referência de URI de verdade
+        // (RFC 3986), preservando a query string; `.absoluteURL` funde com `baseURL` porque
+        // `URLRequest` precisa de uma URL absoluta, não relativa.
+        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
+            fatalError("APIClient: path inválido para montar request: \(path)")
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = method
         if let body {
             request.httpBody = body

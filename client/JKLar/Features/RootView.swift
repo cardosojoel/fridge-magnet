@@ -33,7 +33,7 @@ struct RootView: View {
     /// (`APIClient.setSessionEstablishedHandler`) observar a sessão de verdade em vez de um
     /// `APIClient` desconectado.
     @State private var pushRegistrationService: PushRegistrationService
-    /// D-13: `NotificationPrimerView` nasce exatamente na transição para `.inHousehold`
+    /// D-13: o primer de notificação nasce exatamente na transição para `.inHousehold`
     /// (`.onChange` abaixo), nunca antes de haver casa. `PushRegistrationService.hasShownPrimer`
     /// (persistido, D-14) é o que impede o sheet de reabrir depois de concedido ou recusado —
     /// este `@State` só controla a apresentação da instância atual do app.
@@ -56,7 +56,7 @@ struct RootView: View {
                 // saída, nenhum caminho leva o app para a tela da casa sem casa.
                 OnboardingView()
             case .inHousehold:
-                HouseholdView()
+                InHouseholdView()
             }
         }
         .environment(sessionStore)
@@ -74,6 +74,27 @@ struct RootView: View {
         }
         .sheet(isPresented: $isNotificationPrimerPresented) {
             NotificationPrimerView(pushRegistrationService: pushRegistrationService)
+        }
+    }
+}
+
+/// Destino de `.inHousehold` desde o plano 02-05 — assunção do planejador registrada em
+/// `<planner_assumptions>` do plano (o `02-UI-SPEC.md` fixa o título/FAB do feed, mas não
+/// diz como o mural e a tela da casa convivem): duas abas, Mural primeiro (tela de uso
+/// diário) e Casa depois (administração). Rótulos de `JKCopy`, confirmados no checkpoint de
+/// verificação humana do plano.
+private struct InHouseholdView: View {
+    var body: some View {
+        TabView {
+            MuralFeedView()
+                .tabItem {
+                    Label(JKCopy.muralTabLabel, systemImage: "rectangle.stack")
+                }
+
+            HouseholdView()
+                .tabItem {
+                    Label(JKCopy.householdTabLabel, systemImage: "house.fill")
+                }
         }
     }
 }
