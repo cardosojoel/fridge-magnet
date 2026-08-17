@@ -38,6 +38,15 @@ final class MuralFeedViewModel {
     /// sobreviver a um refresh nem ser gravada em disco, preferências ou qualquer cache
     /// persistente.
     private(set) var photoURLsByRecado: [UUID: [PhotoDownloadDTO]] = [:]
+    /// Erro inline de uma ação que falhou (toque de reação) — nunca troca `state`, mesmo
+    /// papel de `HouseholdViewModel.actionErrorMessage`: uma reação que falhou não pode
+    /// esvaziar a lista de recados da tela.
+    private(set) var actionErrorMessage: String?
+    /// Qual recado `actionErrorMessage` descreve (Rule 2 — funcionalidade crítica ausente do
+    /// texto do plano): sem isto, `RecadoCard` não teria como saber SE a mensagem é sobre o
+    /// próprio cartão ou sobre outro, e mostraria "Não foi possível reagir" pendurado embaixo
+    /// de todos os cartões da lista ao mesmo tempo em vez de só naquele que o toque errou.
+    private(set) var actionErrorRecadoID: UUID?
 
     private var nextCursor: Int64?
     /// Guarda de concorrência: `loadNextPage()` chamado duas vezes ao mesmo tempo dispara
@@ -148,6 +157,51 @@ final class MuralFeedViewModel {
     /// lógica de "é a última linha carregada?" mora aqui, não na view.
     func shouldTriggerNextPage(after id: UUID) -> Bool {
         items.last?.id == id
+    }
+
+    /// Alternância otimista de reação (D-07/D-07b, plano 02-07) — repassa para `ReactionOptimism`
+    /// (declarado em `RecadoDetailViewModel.swift`, reusado por ambos), para o detalhe e o
+    /// feed nunca divergirem na semântica de substituição. Aplica o otimismo local ANTES da
+    /// chamada de rede resolver, substitui o resumo local pelo do servidor no sucesso, e
+    /// reverte à cópia guardada na falha — nunca deixa a interface mostrando um estado que o
+    /// servidor recusou.
+    func toggleReaction(recadoID: UUID, kind: ReactionKind) async {
+        actionErrorMessage = nil
+        actionErrorRecadoID = nil
+        guard let index = items.firstIndex(where: { $0.id == recadoID }) else { return }
+        let previousReactions = items[index].reactions
+        let previousMyReaction = items[index].myReaction
+
+        let optimistic = ReactionOptimism.applyToggle(
+            reactions: previousReactions, myReaction: previousMyReaction, tapped: kind
+        )
+        items[index].reactions = optimistic.reactions
+        items[index].myReaction = optimistic.myReaction
+        state = .loaded(items: items)
+
+        do {
+            let summary = try await ReactionOptimism.resolve(
+                recadoID: recadoID, kind: kind, previousMyReaction: previousMyReaction, apiClient: apiClient
+            )
+            applyReactionSummary(summary, toRecadoID: recadoID)
+        } catch {
+            guard let revertIndex = items.firstIndex(where: { $0.id == recadoID }) else { return }
+            items[revertIndex].reactions = previousReactions
+            items[revertIndex].myReaction = previousMyReaction
+            state = .loaded(items: items)
+            actionErrorMessage = JKCopy.muralReactionErrorMessage
+            actionErrorRecadoID = recadoID
+        }
+    }
+
+    /// Substitui `reactions`/`myReaction` do item pelo resumo real do servidor — chamado no
+    /// sucesso de `toggleReaction` e, quando o detalhe fecha, para o resumo de reação do
+    /// cartão do feed refletir o que foi feito no detalhe (plano 02-07 Task 3).
+    func applyReactionSummary(_ summary: RecadoReactionSummaryDTO, toRecadoID recadoID: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == recadoID }) else { return }
+        items[index].reactions = summary.reactions
+        items[index].myReaction = summary.myReaction
+        state = .loaded(items: items)
     }
 
     private var currentGood: [RecadoDTO]? {

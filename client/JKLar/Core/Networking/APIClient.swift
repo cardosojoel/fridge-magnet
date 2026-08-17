@@ -322,6 +322,63 @@ actor APIClient {
         return try Self.decode(PhotoDownloadURLsResponse.self, from: data)
     }
 
+    /// `PUT /api/v1/recados/:recadoID/reactions` (plano 02-07, rota de definir do
+    /// `RecadoController` do plano 02-03) — substitui a única reação ativa do requisitante
+    /// (D-07b); PUT, não POST, porque a operação é a substituição idempotente da reação, e o
+    /// cliente aplica alternância otimista que pode reenviar a mesma chamada.
+    func setReaction(recadoID: UUID, kind: ReactionKind) async throws -> RecadoReactionSummaryDTO {
+        let body = try Self.encoder.encode(SetReactionRequest(kind: kind))
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(recadoID.uuidString)/reactions", method: "PUT", body: body, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(RecadoReactionSummaryDTO.self, from: data)
+    }
+
+    /// `DELETE /api/v1/recados/:recadoID/reactions` (plano 02-07, rota de remover do
+    /// `RecadoController` do plano 02-03) — idempotente mesmo sem reação ativa; 204 sem corpo,
+    /// então devolve `nil` em vez de decodificar.
+    func clearReaction(recadoID: UUID) async throws -> RecadoReactionSummaryDTO? {
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(recadoID.uuidString)/reactions", method: "DELETE", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 204 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return nil
+    }
+
+    /// `GET /api/v1/recados/:recadoID/comments` (plano 02-07, `RecadoController.comments` do
+    /// plano 02-03) — lista inteira sem paginação (teto de 200 no servidor é só guarda, não
+    /// recurso de navegação); ordem cronológica crescente que o servidor devolveu, o cliente
+    /// nunca reordena.
+    func comments(recadoID: UUID) async throws -> [CommentDTO] {
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(recadoID.uuidString)/comments", method: "GET", body: nil, requiresAuth: true
+        )
+        guard response.statusCode == 200 else {
+            throw APIClientError.http(status: response.statusCode)
+        }
+        return try Self.decode([CommentDTO].self, from: data)
+    }
+
+    /// `POST /api/v1/recados/:recadoID/comments` (plano 02-07, `RecadoController.createComment`
+    /// do plano 02-03) — `mentionedUserIDs` usa o mesmo seletor estruturado do recado (D-06);
+    /// marcar dentro de um comentário notifica pelo mesmo mecanismo do recado (D-09). Precisa
+    /// distinguir `.notHouseholdMember` e `.validation` tipados, por isso `Self.typedError(...)`.
+    func createComment(recadoID: UUID, _ request: CreateCommentRequest) async throws -> CommentDTO {
+        let body = try Self.encoder.encode(request)
+        let (data, response) = try await send(
+            path: "api/v1/recados/\(recadoID.uuidString)/comments", method: "POST", body: body, requiresAuth: true
+        )
+        guard response.statusCode == 201 else {
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
+        }
+        return try Self.decode(CommentDTO.self, from: data)
+    }
+
     /// `POST /api/v1/auth/logout` — D-11: o logout do servidor é o que vale. Sempre apaga o
     /// Keychain local, mesmo que a chamada de rede falhe (o dispositivo não deve continuar
     /// achando que está logado só porque a rede caiu no momento do logout).

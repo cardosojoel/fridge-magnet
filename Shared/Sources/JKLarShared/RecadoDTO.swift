@@ -50,8 +50,10 @@ public struct MentionDTO: Codable, Sendable {
 }
 
 /// Contagem de uma reação específica no recado — a barra de reações do feed soma por
-/// `kind`, nunca lista cada reação individualmente.
-public struct ReactionCountDTO: Codable, Sendable {
+/// `kind`, nunca lista cada reação individualmente. `Equatable` (aditivo, plano 02-07) — a
+/// alternância otimista do cliente precisa comparar resumos completos (reversão exata em
+/// falha, prova de teste).
+public struct ReactionCountDTO: Codable, Sendable, Equatable {
     public var kind: ReactionKind
     public var count: Int
 

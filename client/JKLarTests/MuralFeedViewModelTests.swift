@@ -19,16 +19,34 @@ private actor MuralFeedStubTransport: APIClientTransport {
         case failure(status: Int)
     }
 
+    /// Resultado simulado de `PUT api/v1/recados/:id/reactions` (plano 02-07 Task 1).
+    enum SetReactionOutcome {
+        case success(RecadoReactionSummaryDTO)
+        case failure(status: Int)
+    }
+
+    /// Resultado simulado de `DELETE api/v1/recados/:id/reactions` (plano 02-07 Task 1).
+    enum ClearReactionOutcome {
+        case success
+        case failure(status: Int)
+    }
+
     /// Página devolvida quando `cursor` é `nil` (primeira carga/`reloadFromTop`).
     private var firstPageOutcome: Outcome
     /// Páginas devolvidas por cursor explícito (`loadNextPage`), chave = valor do cursor.
     private var cursoredOutcomes: [Int64: Outcome]
     private var photoURLsOutcome: PhotoURLsOutcome = .success(PhotoDownloadURLsResponse(recados: []))
+    private var setReactionOutcome: SetReactionOutcome = .success(RecadoReactionSummaryDTO(reactions: [], myReaction: nil))
+    private var clearReactionOutcome: ClearReactionOutcome = .success
     private(set) var callCount = 0
     private(set) var photoURLsCallCount = 0
+    private(set) var setReactionCallCount = 0
+    private(set) var clearReactionCallCount = 0
     /// Um elemento por chamada a `photos/urls`, na ordem em que ocorreram — os
     /// `recadoIDs` que o corpo daquela chamada pediu.
     private(set) var photoURLsRequestedIDs: [[UUID]] = []
+    /// Um elemento por chamada a `PUT .../reactions`, na ordem em que ocorreram.
+    private(set) var setReactionRequestedKinds: [ReactionKind] = []
 
     init(firstPage: Outcome, cursoredPages: [Int64: Outcome] = [:]) {
         self.firstPageOutcome = firstPage
@@ -47,16 +65,51 @@ private actor MuralFeedStubTransport: APIClientTransport {
         photoURLsOutcome = outcome
     }
 
+    func setSetReactionOutcome(_ outcome: SetReactionOutcome) {
+        setReactionOutcome = outcome
+    }
+
+    func setClearReactionOutcome(_ outcome: ClearReactionOutcome) {
+        clearReactionOutcome = outcome
+    }
+
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let url = request.url!
         if url.path.hasSuffix("/photos/urls") {
             return try encodePhotoURLs(request: request, url: url)
+        }
+        if url.path.hasSuffix("/reactions") {
+            return try encodeReaction(request: request, url: url)
         }
 
         callCount += 1
         let cursor = Self.cursor(from: url)
         let outcome = cursor.flatMap { cursoredOutcomes[$0] } ?? firstPageOutcome
         return try Self.encode(outcome, url: url)
+    }
+
+    private func encodeReaction(request: URLRequest, url: URL) throws -> (Data, HTTPURLResponse) {
+        if request.httpMethod == "PUT" {
+            setReactionCallCount += 1
+            if let body = request.httpBody, let decoded = try? JSONDecoder().decode(SetReactionRequest.self, from: body) {
+                setReactionRequestedKinds.append(decoded.kind)
+            }
+            switch setReactionOutcome {
+            case .success(let summary):
+                let data = try JSONEncoder().encode(summary)
+                return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            case .failure(let status):
+                return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
+            }
+        } else {
+            clearReactionCallCount += 1
+            switch clearReactionOutcome {
+            case .success:
+                return (Data(), HTTPURLResponse(url: url, statusCode: 204, httpVersion: nil, headerFields: nil)!)
+            case .failure(let status):
+                return (Data(), HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!)
+            }
+        }
     }
 
     private func encodePhotoURLs(request: URLRequest, url: URL) throws -> (Data, HTTPURLResponse) {
@@ -164,6 +217,55 @@ private actor MuralFeedConcurrencyGateTransport: APIClientTransport {
         isWaiting = true
         await withCheckedContinuation { continuation in
             self.continuation = continuation
+        }
+    }
+}
+
+/// Transporte que bloqueia cada chamada de `PUT .../reactions` até ser liberada
+/// individualmente, por índice de chamada — usado só pelo teste de duas alternâncias
+/// concorrentes no mesmo recado (plano 02-07 Task 1), para controlar exatamente qual resposta
+/// do servidor "chega" por último. Só chamadas a `.../reactions` são bloqueadas — a carga
+/// inicial do feed (`sut.load()`, que também passa por este transporte) responde na hora com
+/// `page`, senão `load()` nunca voltaria (ficaria esperando um "release" que o teste nunca
+/// pede para uma chamada que ele nem sabe que existe).
+private actor MuralFeedReactionGatedTransport: APIClientTransport {
+    private let page: RecadoFeedPage
+    private let responses: [RecadoReactionSummaryDTO]
+    private var reactionCallCount = 0
+    private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var releasedIndexes: Set<Int> = []
+    private(set) var waitingIndexes: Set<Int> = []
+
+    init(page: RecadoFeedPage, responses: [RecadoReactionSummaryDTO]) {
+        self.page = page
+        self.responses = responses
+    }
+
+    func release(callIndex: Int) {
+        releasedIndexes.insert(callIndex)
+        continuations[callIndex]?.resume()
+        continuations[callIndex] = nil
+    }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let url = request.url!
+        guard url.path.hasSuffix("/reactions") else {
+            let data = try JSONEncoder().encode(page)
+            return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+
+        let index = reactionCallCount
+        reactionCallCount += 1
+        await waitUntilReleased(index)
+        let data = try JSONEncoder().encode(responses[index])
+        return (data, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+
+    private func waitUntilReleased(_ index: Int) async {
+        if releasedIndexes.contains(index) { return }
+        waitingIndexes.insert(index)
+        await withCheckedContinuation { continuation in
+            continuations[index] = continuation
         }
     }
 }
@@ -505,5 +607,187 @@ final class MuralFeedViewModelTests: XCTestCase {
         // (UserDefaults, disco), este teste falharia.
         let sut2 = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
         XCTAssertTrue(sut2.photoURLs(for: recado.id).isEmpty, "o mapa de URLs é só de memória, por instância")
+    }
+
+    // MARK: toggleReaction(recadoID:kind:) (plano 02-07 Task 1)
+
+    private func makeRecadoWithReaction(
+        reactions: [ReactionCountDTO] = [], myReaction: ReactionKind? = nil
+    ) -> RecadoDTO {
+        var recado = makeRecado(sequence: 1)
+        recado.reactions = reactions
+        recado.myReaction = myReaction
+        return recado
+    }
+
+    func testToggleReactionWithoutPriorReactionAppliesLocalOptimismBeforeNetworkResolves() async {
+        let recado = makeRecadoWithReaction()
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let gated = MuralFeedReactionGatedTransport(
+            page: page, responses: [RecadoReactionSummaryDTO(reactions: [ReactionCountDTO(kind: .love, count: 1)], myReaction: .love)]
+        )
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: gated, baseURL: url()))
+        await sut.load()
+
+        let task = Task { await sut.toggleReaction(recadoID: recado.id, kind: .love) }
+        var attempts = 0
+        while await gated.waitingIndexes.isEmpty, attempts < 10_000 {
+            await Task.yield()
+            attempts += 1
+        }
+
+        // Enquanto a requisição de rede ainda está em voo, o otimismo local já aplicou.
+        guard case .loaded(let items) = sut.state, let item = items.first(where: { $0.id == recado.id }) else {
+            return XCTFail("esperava .loaded")
+        }
+        XCTAssertEqual(item.myReaction, .love, "alternância otimista aplica na hora, antes da rede resolver")
+
+        await gated.release(callIndex: 0)
+        await task.value
+    }
+
+    func testToggleReactionWithDifferentKindReplacesInsteadOfAccumulating() async {
+        let recado = makeRecadoWithReaction(reactions: [ReactionCountDTO(kind: .love, count: 1)], myReaction: .love)
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        await transport.setSetReactionOutcome(
+            .success(RecadoReactionSummaryDTO(reactions: [ReactionCountDTO(kind: .laugh, count: 1)], myReaction: .laugh))
+        )
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.toggleReaction(recadoID: recado.id, kind: .laugh)
+
+        guard case .loaded(let items) = sut.state, let item = items.first(where: { $0.id == recado.id }) else {
+            return XCTFail("esperava .loaded")
+        }
+        XCTAssertEqual(item.myReaction, .laugh, "trocar de emoji substitui a anterior, D-07b")
+        XCTAssertEqual(item.reactions.count, 1, "nunca acumula duas reações do mesmo requisitante")
+        let setReactionKinds = await transport.setReactionRequestedKinds
+        XCTAssertEqual(setReactionKinds, [.laugh], "chama a rota de definir, não a de remover")
+    }
+
+    func testToggleReactionWithSameActiveKindClearsAndCallsClearRoute() async {
+        let recado = makeRecadoWithReaction(reactions: [ReactionCountDTO(kind: .love, count: 1)], myReaction: .love)
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.toggleReaction(recadoID: recado.id, kind: .love)
+
+        guard case .loaded(let items) = sut.state, let item = items.first(where: { $0.id == recado.id }) else {
+            return XCTFail("esperava .loaded")
+        }
+        XCTAssertNil(item.myReaction, "tocar de novo no emoji ativo limpa a reação")
+        XCTAssertTrue(item.reactions.isEmpty)
+        let clearCallCount = await transport.clearReactionCallCount
+        XCTAssertEqual(clearCallCount, 1, "chama a rota de remover, não a de definir")
+    }
+
+    func testToggleReactionSuccessReplacesLocalSummaryWithServerSummary() async {
+        let recado = makeRecadoWithReaction()
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let serverSummary = RecadoReactionSummaryDTO(reactions: [ReactionCountDTO(kind: .love, count: 5)], myReaction: .love)
+        await transport.setSetReactionOutcome(.success(serverSummary))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.toggleReaction(recadoID: recado.id, kind: .love)
+
+        guard case .loaded(let items) = sut.state, let item = items.first(where: { $0.id == recado.id }) else {
+            return XCTFail("esperava .loaded")
+        }
+        XCTAssertEqual(item.reactions, serverSummary.reactions, "o resumo local é substituído pelo do servidor")
+        XCTAssertEqual(item.myReaction, serverSummary.myReaction)
+    }
+
+    func testToggleReactionFailureRevertsExactlyToPriorStateAndSetsActionErrorMessage() async {
+        let otherRecado = makeRecado(sequence: 2)
+        let recado = makeRecadoWithReaction(reactions: [ReactionCountDTO(kind: .love, count: 1)], myReaction: .love)
+        let page = RecadoFeedPage(items: [otherRecado, recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        await transport.setSetReactionOutcome(.failure(status: 500))
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+
+        await sut.toggleReaction(recadoID: recado.id, kind: .laugh)
+
+        guard case .loaded(let items) = sut.state, let item = items.first(where: { $0.id == recado.id }) else {
+            return XCTFail("esperava .loaded")
+        }
+        XCTAssertEqual(item.myReaction, .love, "falha reverte exatamente ao emoji ativo anterior")
+        XCTAssertEqual(item.reactions, [ReactionCountDTO(kind: .love, count: 1)], "falha reverte exatamente às contagens anteriores")
+        XCTAssertEqual(sut.actionErrorMessage, JKCopy.muralReactionErrorMessage)
+
+        let untouchedItem = items.first(where: { $0.id == otherRecado.id })
+        XCTAssertEqual(untouchedItem?.reactions, otherRecado.reactions, "a reversão preserva o resto da lista")
+    }
+
+    func testConcurrentTogglesOnSameRecadoEndUpConsistentWithLastServerResponse() async {
+        let recado = makeRecadoWithReaction()
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let firstResponse = RecadoReactionSummaryDTO(reactions: [ReactionCountDTO(kind: .love, count: 1)], myReaction: .love)
+        let lastResponse = RecadoReactionSummaryDTO(reactions: [ReactionCountDTO(kind: .laugh, count: 1)], myReaction: .laugh)
+        let gated = MuralFeedReactionGatedTransport(page: page, responses: [firstResponse, lastResponse])
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: gated, baseURL: url()))
+        await sut.load()
+
+        let task1 = Task { await sut.toggleReaction(recadoID: recado.id, kind: .love) }
+        var attempts = 0
+        while await gated.waitingIndexes.count < 1, attempts < 10_000 {
+            await Task.yield()
+            attempts += 1
+        }
+        let task2 = Task { await sut.toggleReaction(recadoID: recado.id, kind: .laugh) }
+        attempts = 0
+        while await gated.waitingIndexes.count < 2, attempts < 10_000 {
+            await Task.yield()
+            attempts += 1
+        }
+
+        // A última resposta do servidor a chegar (index 1) é a que deve valer no final —
+        // libera a chamada 0 primeiro, depois a 1, para a 1 ser a última a resolver.
+        await gated.release(callIndex: 0)
+        await Task.yield()
+        await gated.release(callIndex: 1)
+        await task1.value
+        await task2.value
+
+        guard case .loaded(let items) = sut.state, let item = items.first(where: { $0.id == recado.id }) else {
+            return XCTFail("esperava .loaded")
+        }
+        XCTAssertEqual(item.reactions, lastResponse.reactions, "estado final consistente com a última resposta do servidor")
+        XCTAssertEqual(item.myReaction, lastResponse.myReaction)
+    }
+
+    func testReloadFromTopAfterReactionShowsServerSummaryWithNoPendingOptimisticState() async {
+        let recado = makeRecadoWithReaction(reactions: [ReactionCountDTO(kind: .love, count: 1)], myReaction: .love)
+        let page = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        await transport.setSetReactionOutcome(
+            .success(RecadoReactionSummaryDTO(reactions: [ReactionCountDTO(kind: .laugh, count: 1)], myReaction: .laugh))
+        )
+        let sut = MuralFeedViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        await sut.load()
+        await sut.toggleReaction(recadoID: recado.id, kind: .laugh)
+
+        let refreshedFromServer = RecadoDTO(
+            id: recado.id, authorID: recado.authorID, authorDisplayName: recado.authorDisplayName,
+            isMine: recado.isMine, text: recado.text, sequence: recado.sequence, createdAt: recado.createdAt,
+            updatedAt: recado.updatedAt, photos: recado.photos, mentions: recado.mentions,
+            reactions: [ReactionCountDTO(kind: .laugh, count: 1)], myReaction: .laugh,
+            commentCount: recado.commentCount, latestComments: recado.latestComments
+        )
+        await transport.setFirstPage(.page(RecadoFeedPage(items: [refreshedFromServer], nextCursor: nil)))
+
+        await sut.reloadFromTop()
+
+        guard case .loaded(let items) = sut.state, let item = items.first(where: { $0.id == recado.id }) else {
+            return XCTFail("esperava .loaded")
+        }
+        XCTAssertEqual(item.reactions, [ReactionCountDTO(kind: .laugh, count: 1)])
+        XCTAssertEqual(item.myReaction, .laugh)
     }
 }

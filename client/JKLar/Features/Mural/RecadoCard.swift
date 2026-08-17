@@ -6,22 +6,23 @@ import SwiftUI
 /// diretamente, sem um tipo de wrapper. Nenhum campo novo, nenhuma mudança de comportamento.
 extension PhotoDownloadDTO: Identifiable {}
 
+/// `RecadoDTO` já carrega `id: UUID` — conformidade aditiva, só do lado do cliente, para
+/// `MuralFeedView` apresentar `RecadoDetailView` com `.sheet(item:)` (plano 02-07 Task 3) em
+/// vez de um par `Bool`+recado guardado à parte. Nenhum campo novo, nenhuma mudança de
+/// comportamento.
+extension RecadoDTO: Identifiable {}
+
 /// Um recado do feed, envolto em `JKCard` (01-UI-SPEC.md § Native Materials).
 ///
-/// Nesta fatia (planos 02-05/02-06) renderiza: nome do autor + horário relativo, carrossel de
-/// fotos (quando há foto), texto com truncagem em ~5 linhas e "ver mais" inline, chips de
-/// menção (quando há menção), e o menu de overflow `ellipsis` (Editar/Apagar) mostrado
-/// **somente** quando `recado.isMine` — sinal já calculado pelo servidor (D-03), o cliente
-/// nunca decide isso comparando nome/posição. O diálogo de confirmação de apagar mora aqui
-/// (não no chamador): `onDelete` só é invocado depois que a pessoa confirma no diálogo
-/// destrutivo.
-///
-/// Pontos de extensão nomeados, na ordem do `02-UI-SPEC.md` § Native Materials ("carrossel,
-/// texto, chips de menção, barra de reação, prévia dos 2 últimos comentários") — os dois
-/// últimos continuam marcados, pertencem ao plano 02-07, no mesmo arquivo:
-/// - Barra de reação (plano 02-07): entraria abaixo dos chips de menção.
-/// - Prévia dos 2 últimos comentários + link "Ver todos os {n} comentários" (plano 02-07):
-///   entraria abaixo da barra de reação.
+/// Composição completa (planos 02-05/02-06/02-07), nesta ordem — a ordem é contrato do
+/// `02-UI-SPEC.md` § Native Materials, não preferência: nome do autor + horário relativo,
+/// carrossel de fotos (quando há foto), texto com truncagem em ~5 linhas e "ver mais" inline,
+/// chips de menção (quando há menção), barra de reação de conjunto fechado (D-07/D-07b), e
+/// prévia dos 2 últimos comentários com link para o detalhe a partir de 3. O menu de overflow
+/// `ellipsis` (Editar/Apagar) é mostrado **somente** quando `recado.isMine` — sinal já
+/// calculado pelo servidor (D-03), o cliente nunca decide isso comparando nome/posição. O
+/// diálogo de confirmação de apagar mora aqui (não no chamador): `onDelete` só é invocado
+/// depois que a pessoa confirma no diálogo destrutivo.
 struct RecadoCard: View {
     let recado: RecadoDTO
     /// URLs de leitura das fotos deste recado — passadas pela view pai
@@ -30,6 +31,17 @@ struct RecadoCard: View {
     var photoURLs: [PhotoDownloadDTO] = []
     var onEdit: (RecadoDTO) -> Void
     var onDelete: (RecadoDTO) -> Void
+    /// Toque num emoji da barra — o chamador (`MuralFeedView`) liga isto a
+    /// `viewModel.toggleReaction(recadoID:kind:)`; o cartão em si não fala com a rede.
+    var onReact: (ReactionKind) -> Void
+    /// Mensagem inline de uma reação que falhou neste recado especificamente — `nil` na
+    /// maior parte do tempo; `MuralFeedView` só preenche quando
+    /// `viewModel.actionErrorRecadoID == recado.id`, pra uma falha de reação num cartão não
+    /// aparecer pendurada embaixo de todos os outros cartões da lista.
+    var reactionErrorMessage: String? = nil
+    /// Abre `RecadoDetailView` deste recado — único caminho de navegação pra comentários além
+    /// da prévia de 2 (02-UI-SPEC.md § Copywriting Contract, "Feed card — comment-count link").
+    var onOpenDetail: () -> Void
 
     @State private var isTextExpanded = false
     @State private var isDeleteConfirmationPresented = false
@@ -51,8 +63,13 @@ struct RecadoCard: View {
                     JKMentionChipRow(mentions: recado.mentions)
                 }
 
-                // MARK: - Ponto de extensão: barra de reação (plano 02-07)
-                // MARK: - Ponto de extensão: prévia dos 2 últimos comentários (plano 02-07)
+                reactionSection
+                    .padding(.top, JKSpacing.md)
+
+                if recado.commentCount > 0 {
+                    commentSummarySection
+                        .padding(.top, JKSpacing.sm)
+                }
             }
         }
         .confirmationDialog(
@@ -67,6 +84,47 @@ struct RecadoCard: View {
         } message: {
             Text(JKCopy.muralRecadoDeleteConfirmMessage)
         }
+    }
+
+    /// Barra de reação completa + mensagem de erro inline quando a reação deste cartão
+    /// específico falhou — nunca navega, nunca esvazia a lista (mesmo comportamento do
+    /// detalhe).
+    private var reactionSection: some View {
+        VStack(alignment: .leading, spacing: JKSpacing.xs) {
+            JKReactionBar(reactions: recado.reactions, myReaction: recado.myReaction, onTap: onReact)
+
+            if let reactionErrorMessage {
+                Text(reactionErrorMessage)
+                    .font(JKTypography.label)
+                    .foregroundStyle(JKColor.jkDestructive)
+            }
+        }
+    }
+
+    /// De 1 a 2 comentários: só a prévia. A partir de 3: prévia dos 2 mais recentes + o link
+    /// de contagem. Tocar em qualquer área do resumo (ou no ícone `bubble.right`) abre o
+    /// detalhe — chamado só quando `recado.commentCount > 0` (ver `body`), então esta view
+    /// nunca precisa lidar com o caso de zero comentários.
+    private var commentSummarySection: some View {
+        Button {
+            onOpenDetail()
+        } label: {
+            VStack(alignment: .leading, spacing: JKSpacing.xs) {
+                ForEach(recado.latestComments.prefix(2), id: \.id) { comment in
+                    JKCommentRow(comment: comment)
+                }
+
+                if recado.commentCount >= 3 {
+                    HStack(spacing: JKSpacing.xs) {
+                        Image(systemName: "bubble.right")
+                        Text(JKCopy.muralFeedCommentCountLink(recado.commentCount))
+                    }
+                    .font(JKTypography.label)
+                    .foregroundStyle(JKColor.jkAccent)
+                }
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     /// Carrossel de foto, borda a borda dentro do `JKCard` — cantos superiores herdam o raio

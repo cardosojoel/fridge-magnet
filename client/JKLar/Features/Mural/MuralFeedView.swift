@@ -13,6 +13,11 @@ struct MuralFeedView: View {
     @State private var viewModel = MuralFeedViewModel()
     @State private var isComposePresented = false
     @State private var editingRecado: RecadoDTO?
+    /// Recado aberto no detalhe (plano 02-07 Task 3) — `.sheet(item:)` em vez de um par
+    /// `Bool`+recado guardado à parte, já que `RecadoDTO` ganhou `Identifiable` aditivo
+    /// (`RecadoCard.swift`). Ao fechar, `viewModel.reloadFromTop()` roda pra contagem de
+    /// comentários e resumo de reação do cartão refletirem o que foi feito no detalhe.
+    @State private var selectedRecado: RecadoDTO?
     /// Só a ação "Apagar" do menu de overflow passa por aqui — `MuralFeedViewModel` não
     /// expõe um método de apagar (fora do `<files>` da Task 3 do plano, que não volta a
     /// tocar `MuralFeedViewModel.swift`), então a chamada mora nesta view, sempre seguida de
@@ -50,6 +55,11 @@ struct MuralFeedView: View {
         }
         .sheet(isPresented: $isComposePresented) {
             composeSheet
+        }
+        .sheet(item: $selectedRecado, onDismiss: {
+            Task { await viewModel.reloadFromTop() }
+        }) { recado in
+            RecadoDetailView(recado: recado, photoURLs: viewModel.photoURLs(for: recado.id), apiClient: apiClient)
         }
     }
 
@@ -115,7 +125,12 @@ struct MuralFeedView: View {
                 recado: recado,
                 photoURLs: viewModel.photoURLs(for: recado.id),
                 onEdit: { editingRecado = $0; isComposePresented = true },
-                onDelete: handleDelete
+                onDelete: handleDelete,
+                onReact: { kind in
+                    Task { await viewModel.toggleReaction(recadoID: recado.id, kind: kind) }
+                },
+                reactionErrorMessage: viewModel.actionErrorRecadoID == recado.id ? viewModel.actionErrorMessage : nil,
+                onOpenDetail: { selectedRecado = recado }
             )
             .plainRow()
             .task {
