@@ -61,6 +61,19 @@ final class RecadoFeedPaginationTests: XCTestCase {
         return try XCTUnwrap(captured)
     }
 
+    /// Fixa um recado (rota do plano 02-11) — sem corpo, autor-ou-admin.
+    private static func pinRecado(app: Application, bearer: String, recadoID: UUID) async throws {
+        try await app.testable().test(
+            .PUT, "/api/v1/recados/\(recadoID)/pin",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                XCTAssertEqual(res.status, .ok)
+            }
+        )
+    }
+
     // MARK: Casos
 
     func testFeedReturnsNewestFirst() async throws {
@@ -185,6 +198,92 @@ final class RecadoFeedPaginationTests: XCTestCase {
                 "só o recado de A com sequence menor que o cursor forjado deve aparecer"
             )
             _ = aSecond
+        }
+    }
+
+    // MARK: Forma do feed com bloco de fixados (D-14, plano 02-11)
+
+    func testPinnedBlockComesOnFirstPageOrderedByMostRecentPinAndExcludedFromStream() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let admin = members[0]
+
+            let posted = try await Self.postRecados(app: app, bearer: admin.token, count: 25)
+
+            // Fixa três recados NESTA ordem — o bloco deve vir do mais recentemente fixado
+            // para o mais antigo: [posted[10], posted[0], posted[5]].
+            try await Self.pinRecado(app: app, bearer: admin.token, recadoID: posted[5].id)
+            try await Self.pinRecado(app: app, bearer: admin.token, recadoID: posted[0].id)
+            try await Self.pinRecado(app: app, bearer: admin.token, recadoID: posted[10].id)
+
+            let firstPage = try await Self.getFeed(app: app, bearer: admin.token)
+
+            XCTAssertEqual(
+                firstPage.pinned.map(\.id), [posted[10].id, posted[0].id, posted[5].id],
+                "bloco ordenado pela fixação mais recente primeiro"
+            )
+
+            // Nenhum recado aparece duas vezes na mesma resposta: os fixados são excluídos
+            // do fluxo paginado.
+            let pinnedIDs = Set(firstPage.pinned.map(\.id))
+            XCTAssertTrue(
+                firstPage.items.allSatisfy { !pinnedIDs.contains($0.id) },
+                "recado fixado nunca aparece no fluxo da mesma resposta"
+            )
+
+            // 25 - 3 fixados = 22 no fluxo → primeira página cheia (20) e mais uma.
+            XCTAssertEqual(firstPage.items.count, 20)
+            let cursor = try XCTUnwrap(firstPage.nextCursor)
+
+            // Página seguinte: bloco de fixados VAZIO — ele não se repete a cada página.
+            let secondPage = try await Self.getFeed(app: app, bearer: admin.token, cursor: cursor)
+            XCTAssertTrue(secondPage.pinned.isEmpty, "o bloco só vem na primeira página")
+            XCTAssertEqual(secondPage.items.count, 2)
+
+            // A união fluxo + bloco cobre os 25 sem repetição.
+            let allIDs = firstPage.pinned.map(\.id) + firstPage.items.map(\.id) + secondPage.items.map(\.id)
+            XCTAssertEqual(allIDs.count, Set(allIDs).count)
+            XCTAssertEqual(Set(allIDs), Set(posted.map(\.id)))
+        }
+    }
+
+    func testFirstPageWithNoPinnedHasEmptyBlockAndIntactStream() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let admin = members[0]
+
+            let posted = try await Self.postRecados(app: app, bearer: admin.token, count: 5)
+
+            let page = try await Self.getFeed(app: app, bearer: admin.token)
+            XCTAssertTrue(page.pinned.isEmpty, "sem nenhum recado fixado, o bloco vem vazio")
+            XCTAssertEqual(page.items.map(\.id), posted.reversed().map(\.id), "o fluxo fica intacto")
+        }
+    }
+
+    func testConcurrentInsertGuaranteeStillHoldsWithPinnedAndArchiveFilters() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let admin = members[0]
+
+            let originalPosted = try await Self.postRecados(app: app, bearer: admin.token, count: 25)
+            // Um dos 25 fixado ANTES da primeira busca: sai do fluxo e entra no bloco — a
+            // garantia de não repetir nem perder vale para o conjunto fluxo+bloco.
+            try await Self.pinRecado(app: app, bearer: admin.token, recadoID: originalPosted[3].id)
+
+            let firstPage = try await Self.getFeed(app: app, bearer: admin.token)
+            let cursor = try XCTUnwrap(firstPage.nextCursor)
+
+            try await Self.postRecados(app: app, bearer: admin.token, count: 3, prefix: "novo")
+
+            let secondPage = try await Self.getFeed(app: app, bearer: admin.token, cursor: cursor)
+
+            let combinedIDs = firstPage.pinned.map(\.id) + firstPage.items.map(\.id) + secondPage.items.map(\.id)
+            let combinedIDSet = Set(combinedIDs)
+            XCTAssertEqual(combinedIDs.count, combinedIDSet.count, "nenhuma linha aparece duas vezes")
+            XCTAssertTrue(
+                Set(originalPosted.map(\.id)).isSubset(of: combinedIDSet),
+                "nenhum dos 25 originais pode ficar de fora do conjunto fluxo+bloco"
+            )
         }
     }
 }

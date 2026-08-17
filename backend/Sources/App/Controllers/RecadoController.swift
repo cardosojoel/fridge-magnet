@@ -39,6 +39,12 @@ struct RecadoController: RouteCollection {
     /// do teto de 200 já registrado em `comments`.
     static let maxArchivedListSize = 200
 
+    /// Guarda de tamanho de resposta do bloco de fixados (plano 02-11) — NÃO um teto de
+    /// produto: o 02-UI-SPEC.md recusa explicitamente definir um limite de quantos recados
+    /// podem estar fixados (linha `overflow | pinned-block`, backstop a reavaliar com uso
+    /// real da família). Existe só para o bloco nunca virar uma resposta patológica.
+    static let maxPinnedBlockSize = 50
+
     func boot(routes: any RoutesBuilder) throws {
         let recados = routes.grouped("api", "v1", "recados")
         let authenticated = recados.grouped(SessionAuthenticator(), User.guardMiddleware())
@@ -166,8 +172,15 @@ struct RecadoController: RouteCollection {
         // linha (02-RESEARCH.md Pitfall 2).
         let cursor: Int64? = try? req.query.get(Int64.self, at: "cursor")
 
+        // Dois filtros além do de casa (plano 02-11): arquivamento ausente tira o recado
+        // arquivado do mural de TODOS (D-15); fixação ausente impede um recado fixado de
+        // aparecer no bloco E no fluxo ("nunca renderizado duas vezes", 02-UI-SPEC.md).
+        // O esquema de cursor fica intacto: o cursor compara valor de `sequence`, nunca
+        // posição — excluir linhas por filtro não abre buraco nele.
         var query = Recado.query(on: req.scopedDB)
             .filter(\.$household.$id == context.householdID)
+            .filter(\.$archivedAt == nil)
+            .filter(\.$pinnedAt == nil)
         if let cursor {
             query = query.filter(\.$sequence < cursor)
         }
@@ -190,8 +203,30 @@ struct RecadoController: RouteCollection {
             ))
         }
 
+        // Bloco de fixados FORA da paginação por cursor: só na primeira página (requisição
+        // sem cursor); com cursor, coleção vazia sem nenhuma consulta. Consequência aceita:
+        // desafixar um recado no meio de uma rolagem pode fazê-lo reaparecer numa página
+        // seguinte — mesma classe de evento de "um recado novo chega enquanto a pessoa
+        // rola", e o cliente já descarta id repetido em `loadNextPage`.
+        var pinnedDTOs: [RecadoDTO] = []
+        if cursor == nil {
+            let pinnedRows = try await Recado.query(on: req.scopedDB)
+                .filter(\.$household.$id == context.householdID)
+                .filter(\.$pinnedAt != nil)
+                .filter(\.$archivedAt == nil)
+                .sort(\.$pinnedAt, .descending)
+                .limit(Self.maxPinnedBlockSize)
+                .all()
+            pinnedDTOs.reserveCapacity(pinnedRows.count)
+            for recado in pinnedRows {
+                pinnedDTOs.append(try await Self.buildDTO(
+                    recado: recado, requesterID: userID, viewerRole: context.role, on: req.scopedDB, logger: req.logger
+                ))
+            }
+        }
+
         let nextCursor = hasMore ? items.last?.sequence : nil
-        let feedPage = RecadoFeedPage(items: dtos, nextCursor: nextCursor)
+        let feedPage = RecadoFeedPage(items: dtos, nextCursor: nextCursor, pinned: pinnedDTOs)
         return try Self.jsonResponse(feedPage, status: .ok)
     }
 

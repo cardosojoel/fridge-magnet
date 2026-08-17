@@ -478,4 +478,135 @@ final class RecadoPinArchiveTests: XCTestCase {
             XCTAssertEqual(status, .notFound)
         }
     }
+
+    // MARK: Task 3 — recado arquivado invisível em toda rota; forma do feed (D-15/D-14)
+
+    /// Tabela das nove operações de recado por id — todas devem responder 404 contra um
+    /// recado arquivado, para QUALQUER papel (T-02-64/T-02-68: um 404 que dependesse do
+    /// papel seria, ele próprio, um oráculo de existência da linha).
+    private static func assertAllRecadoRoutesReturn404(app: Application, bearer: String, recadoID: UUID) async throws {
+        struct RouteCase {
+            let name: String
+            let method: HTTPMethod
+            let suffix: String
+            let encodeBody: ((inout XCTHTTPRequest) throws -> Void)?
+        }
+        let routeCases: [RouteCase] = [
+            .init(name: "editar", method: .PATCH, suffix: "", encodeBody: {
+                try $0.content.encode(UpdateRecadoRequest(text: "edição impossível"), as: .json)
+            }),
+            .init(name: "apagar", method: .DELETE, suffix: "", encodeBody: nil),
+            .init(name: "fixar", method: .PUT, suffix: "/pin", encodeBody: nil),
+            .init(name: "desafixar", method: .DELETE, suffix: "/pin", encodeBody: nil),
+            .init(name: "arquivar", method: .PUT, suffix: "/archive", encodeBody: nil),
+            .init(name: "definir reação", method: .PUT, suffix: "/reactions", encodeBody: {
+                try $0.content.encode(SetReactionRequest(kind: .love), as: .json)
+            }),
+            .init(name: "remover reação", method: .DELETE, suffix: "/reactions", encodeBody: nil),
+            .init(name: "listar comentários", method: .GET, suffix: "/comments", encodeBody: nil),
+            .init(name: "criar comentário", method: .POST, suffix: "/comments", encodeBody: {
+                try $0.content.encode(CreateCommentRequest(text: "comentário impossível"), as: .json)
+            }),
+        ]
+
+        for routeCase in routeCases {
+            try await app.testable().test(
+                routeCase.method, "/api/v1/recados/\(recadoID)\(routeCase.suffix)",
+                beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+                    try routeCase.encodeBody?(&req)
+                },
+                afterResponse: { (res: XCTHTTPResponse) async throws in
+                    XCTAssertEqual(
+                        res.status, .notFound,
+                        "\(routeCase.name) deve responder 404 para recado arquivado — como se a linha não existisse"
+                    )
+                }
+            )
+        }
+    }
+
+    func testArchivedRecadoIsNotFoundOnEveryRecadoRoute() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let admin = members[0]
+            let author = members[1]
+
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "arquivado e inalcançável")
+            try await Self.archive(app: app, bearer: author.token, recadoID: recado.id)
+
+            // As nove operações, rodadas DUAS vezes: como autor e como admin — invisível
+            // para todo papel, inclusive quem poderia desarquivar.
+            try await Self.assertAllRecadoRoutesReturn404(app: app, bearer: author.token, recadoID: recado.id)
+            try await Self.assertAllRecadoRoutesReturn404(app: app, bearer: admin.token, recadoID: recado.id)
+        }
+    }
+
+    func testArchivedRecadoDisappearsFromFeedForEveryRole() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let admin = members[0]
+            let author = members[1]
+            let third = members[2]
+
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "some do mural de todos")
+            try await Self.archive(app: app, bearer: author.token, recadoID: recado.id)
+
+            for bearer in [author.token, admin.token, third.token] {
+                let page = try await Self.getFeed(app: app, bearer: bearer)
+                let all = page.pinned + page.items
+                XCTAssertFalse(
+                    all.contains { $0.id == recado.id },
+                    "recado arquivado some do feed de TODOS — autor, admin e demais membros"
+                )
+            }
+        }
+    }
+
+    func testUnarchiveReturnsRecadoToNaturalChronologicalPosition() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let admin = members[0]
+            let author = members[1]
+
+            let recadoA = try await Self.postRecado(app: app, bearer: author.token, text: "A, o mais antigo")
+            let recadoB = try await Self.postRecado(app: app, bearer: author.token, text: "B, postado depois")
+
+            try await Self.archive(app: app, bearer: author.token, recadoID: recadoA.id)
+            let (status, _) = try await Self.unarchive(app: app, bearer: admin.token, recadoID: recadoA.id)
+            XCTAssertEqual(status, .ok)
+
+            // A volta à posição da chave de ordenação original (sequence) — B, postado
+            // depois, continua ACIMA de A; desarquivar nunca põe o recado no topo.
+            let page = try await Self.getFeed(app: app, bearer: author.token)
+            let ids = page.items.map(\.id)
+            let indexA = try XCTUnwrap(ids.firstIndex(of: recadoA.id))
+            let indexB = try XCTUnwrap(ids.firstIndex(of: recadoB.id))
+            XCTAssertLessThan(indexB, indexA, "B continua acima de A no fluxo cronológico")
+        }
+    }
+
+    func testPinMovesRecadoToBlockAndUnpinReturnsItToStream() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 3)
+            let author = members[1]
+
+            let recadoA = try await Self.postRecado(app: app, bearer: author.token, text: "A, fixável")
+            let recadoB = try await Self.postRecado(app: app, bearer: author.token, text: "B, do fluxo")
+
+            // Fixar move A do fluxo para o bloco na busca seguinte.
+            try await Self.pin(app: app, bearer: author.token, recadoID: recadoA.id)
+            let pinnedPage = try await Self.getFeed(app: app, bearer: author.token)
+            XCTAssertTrue(pinnedPage.pinned.contains { $0.id == recadoA.id })
+            XCTAssertFalse(pinnedPage.items.contains { $0.id == recadoA.id })
+            XCTAssertTrue(pinnedPage.items.contains { $0.id == recadoB.id })
+
+            // Desafixar devolve A ao fluxo na posição cronológica dele (abaixo de B).
+            try await Self.unpin(app: app, bearer: author.token, recadoID: recadoA.id)
+            let unpinnedPage = try await Self.getFeed(app: app, bearer: author.token)
+            XCTAssertTrue(unpinnedPage.pinned.isEmpty)
+            let ids = unpinnedPage.items.map(\.id)
+            XCTAssertEqual(ids, [recadoB.id, recadoA.id])
+        }
+    }
 }
