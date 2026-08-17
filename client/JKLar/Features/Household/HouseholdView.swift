@@ -25,6 +25,8 @@ struct HouseholdView: View {
     @State private var isInviteSheetPresented = false
     @State private var isLeaveConfirmationPresented = false
     @State private var memberPendingRemoval: MemberDTO?
+    @State private var isEditNamePresented = false
+    @State private var editNameDraft = ""
 
     var body: some View {
         List {
@@ -100,6 +102,16 @@ struct HouseholdView: View {
             if let member = memberPendingRemoval {
                 Text(JKCopy.householdRemoveConfirmMessage(member.displayName ?? JKCopy.householdUnnamedMember))
             }
+        }
+        // Alert com TextField (iOS 16+/macOS 13+, dentro dos targets de deployment) em vez
+        // de uma folha própria — edição de um único campo curto não justifica uma sheet.
+        .alert(JKCopy.householdEditNameTitle, isPresented: $isEditNamePresented) {
+            TextField(JKCopy.householdEditNameFieldPlaceholder, text: $editNameDraft)
+            Button(JKCopy.householdEditNameSaveButton) {
+                let draft = editNameDraft
+                Task { await viewModel.updateDisplayName(draft) }
+            }
+            Button(JKCopy.cancelButtonLabel, role: .cancel) {}
         }
     }
 
@@ -185,7 +197,10 @@ struct HouseholdView: View {
     }
 
     /// Avatar de monograma, nome (uma linha, truncado por reticências) e `JKRoleBadge`, com
-    /// altura mínima de 56pt (01-UI-SPEC.md § Spacing Scale exceptions).
+    /// altura mínima de 56pt (01-UI-SPEC.md § Spacing Scale exceptions). Na própria linha
+    /// (`isSelf`), um lápis discreto abre a edição de nome — a Apple só entrega o nome na
+    /// primeira autorização, então sem este ponto de edição quem perde esse momento fica
+    /// "Sem nome" para sempre (vale também para Google/Microsoft sem nome no perfil).
     private func memberRow(_ member: MemberDTO) -> some View {
         JKCard {
             HStack(spacing: JKSpacing.sm) {
@@ -196,12 +211,30 @@ struct HouseholdView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
 
+                if member.isSelf {
+                    editNameButton(currentName: member.displayName)
+                }
+
                 Spacer()
 
                 JKRoleBadge(role: member.role.asHouseholdRole)
             }
             .frame(minHeight: JKLayout.memberRowMinHeight)
         }
+    }
+
+    private func editNameButton(currentName: String?) -> some View {
+        Button {
+            editNameDraft = currentName ?? ""
+            isEditNamePresented = true
+        } label: {
+            Image(systemName: "pencil")
+                .foregroundStyle(.secondary)
+                .frame(minWidth: JKLayout.minTapTarget, minHeight: JKLayout.minTapTarget)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(JKCopy.householdEditNameAction)
     }
 
     /// Compartilhado por `swipeActions` e `contextMenu` — mesma ação, dois pontos de entrada

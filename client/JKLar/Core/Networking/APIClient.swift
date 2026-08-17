@@ -135,14 +135,17 @@ actor APIClient {
         return try Self.decode([MemberDTO].self, from: data)
     }
 
-    /// `PATCH /api/v1/auth/profile` (plano 01-07, D-04) — atualização explícita do gênero
-    /// coletado no formulário de criar casa. Nenhuma lógica de tema é derivada deste valor
-    /// nesta fase (Fase 9).
-    func updateProfile(gender: Gender) async throws {
-        let body = try Self.encoder.encode(UpdateProfileRequest(gender: gender))
-        let (_, response) = try await send(path: "api/v1/auth/profile", method: "PATCH", body: body, requiresAuth: true)
+    /// `PATCH /api/v1/auth/profile` (plano 01-07, D-04) — atualização explícita de perfil:
+    /// gênero coletado no formulário de criar casa (nenhuma lógica de tema derivada nesta
+    /// fase — Fase 9) e/ou nome de exibição editado na tela da Casa (a Apple só entrega o
+    /// nome na primeira autorização — sem esta rota, quem perde esse momento fica "Sem
+    /// nome" para sempre). Só os campos não-nulos entram no corpo; o servidor atualiza só o
+    /// que veio.
+    func updateProfile(gender: Gender? = nil, displayName: String? = nil) async throws {
+        let body = try Self.encoder.encode(UpdateProfileRequest(gender: gender, displayName: displayName))
+        let (data, response) = try await send(path: "api/v1/auth/profile", method: "PATCH", body: body, requiresAuth: true)
         guard response.statusCode == 204 else {
-            throw APIClientError.http(status: response.statusCode)
+            throw Self.typedError(from: data, fallbackStatus: response.statusCode)
         }
     }
 

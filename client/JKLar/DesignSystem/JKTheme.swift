@@ -153,6 +153,17 @@ enum JKCopy {
     static let householdLoadErrorMessage = "Não foi possível carregar os membros da casa."
     static let householdUnnamedMember = "Sem nome"
 
+    // MARK: - Editar nome de exibição (2026-08-17)
+    // A Apple só entrega o nome na primeira autorização do app — quem perde esse momento
+    // (primeiro login falhou, app reautorizado) ficaria "Sem nome" para sempre sem um ponto
+    // de edição. Vale para os três provedores.
+
+    static let householdEditNameAction = "Editar nome"
+    static let householdEditNameTitle = "Como você quer aparecer?"
+    static let householdEditNameFieldPlaceholder = "Seu nome"
+    static let householdEditNameSaveButton = "Salvar"
+    static let householdEditNameError = "Não foi possível salvar o nome. Tente de novo."
+
     // MARK: - Convite e lista de membros (plano 01-09, IDENT-04/IDENT-05)
 
     static let householdInviteCTA = "Convidar"

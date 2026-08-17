@@ -115,16 +115,40 @@ struct AuthController: RouteCollection {
         return Response(status: .noContent)
     }
 
-    /// `PATCH /api/v1/auth/profile` — só gênero é atualizável aqui (D-04). Sobrescreve
+    /// Teto do nome de exibição — mesmo espírito do teto de texto do recado
+    /// (`RecadoController.maxTextLength`): validação server-side em toda escrita
+    /// (zero-trust, `.claude/CLAUDE.md`), o cliente pode cortar antes por conforto mas a
+    /// linha de defesa é esta.
+    static let maxDisplayNameLength = 80
+
+    /// `PATCH /api/v1/auth/profile` — atualiza só os campos presentes no corpo. Sobrescreve
     /// deliberadamente qualquer valor já salvo: diferente do preenchimento silencioso em
-    /// `session(req:)` (que só entra se `user.gender == nil`), esta rota é uma escolha
-    /// explícita do usuário no formulário de criar casa, então a intenção mais recente
-    /// vence.
+    /// `session(req:)` (que só entra se o campo estiver `nil`), esta rota é uma escolha
+    /// explícita do usuário (gênero no formulário de criar casa, D-04; nome na tela da
+    /// Casa), então a intenção mais recente vence. Nome vazio ou só espaços é recusado com
+    /// `.validation` — apagar o próprio nome não é uma operação oferecida (voltaria o
+    /// "Sem nome" que esta rota existe para resolver).
     @Sendable
     func updateProfile(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let body = try req.content.decode(UpdateProfileRequest.self)
-        user.gender = body.gender.rawValue
+
+        if let gender = body.gender {
+            user.gender = gender.rawValue
+        }
+
+        if let displayName = body.displayName {
+            let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= Self.maxDisplayNameLength else {
+                return try Self.errorResponse(
+                    code: .validation,
+                    message: "Nome de exibição vazio ou longo demais.",
+                    status: .badRequest
+                )
+            }
+            user.displayName = trimmed
+        }
+
         try await user.save(on: req.db)
         return Response(status: .noContent)
     }

@@ -82,6 +82,22 @@ final class HouseholdViewModel {
         }
     }
 
+    /// `PATCH /auth/profile` com só o nome — sucesso recarrega a lista (o nome novo tem de
+    /// vir do servidor, nunca de uma edição otimista da linha: mesma disciplina de
+    /// `removeMember`); falha mostra a mensagem inline sem descartar a lista atual. O corte
+    /// no cliente (trim/vazio) é conforto — a validação real é o `.validation` do servidor.
+    func updateDisplayName(_ name: String) async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        actionErrorMessage = nil
+        do {
+            try await apiClient.updateProfile(displayName: trimmed)
+            await load()
+        } catch {
+            actionErrorMessage = JKCopy.householdEditNameError
+        }
+    }
+
     /// `DELETE .../membership` — auto-serviço. Sucesso limpa a casa em cache no
     /// `SessionStore` (`refreshHouseholdState()`) e `RootView` reage voltando para
     /// `.needsHousehold` (D-02), sem navegação imperativa. `lastAdmin` mostra a mensagem

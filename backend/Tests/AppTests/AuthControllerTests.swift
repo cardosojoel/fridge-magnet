@@ -240,4 +240,58 @@ final class AuthControllerTests: XCTestCase {
             )
         }
     }
+
+    // MARK: Nome de exibição editável (2026-08-17) — a Apple só entrega o nome na primeira
+    // autorização; esta rota é o que impede "Sem nome" permanente.
+
+    func testUpdateProfileWithDisplayNameOnlySetsNameAndPreservesGender() async throws {
+        try await TestSupport.withApp { app in
+            let user = try await TestSupport.createTestUser(app: app, displayName: nil)
+            user.gender = "feminino"
+            try await user.save(on: app.db)
+            let userID = try user.requireID()
+            let token = try await TestSupport.makeAccessToken(app: app, userID: userID)
+
+            try await app.testable().test(
+                .PATCH, "/api/v1/auth/profile",
+                beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(UpdateProfileRequest(displayName: "  Joel  "), as: .json)
+                },
+                afterResponse: { (res: XCTHTTPResponse) async throws in
+                    XCTAssertEqual(res.status, .noContent)
+                }
+            )
+
+            let reloaded = try await User.find(userID, on: app.db)
+            XCTAssertEqual(reloaded?.displayName, "Joel", "nome salvo já com trim aplicado")
+            XCTAssertEqual(reloaded?.gender, "feminino", "gênero ausente do corpo nunca é tocado")
+        }
+    }
+
+    func testUpdateProfileRejectsBlankAndOversizedDisplayName() async throws {
+        try await TestSupport.withApp { app in
+            let user = try await TestSupport.createTestUser(app: app, displayName: "Ana")
+            let userID = try user.requireID()
+            let token = try await TestSupport.makeAccessToken(app: app, userID: userID)
+
+            for badName in ["   ", String(repeating: "a", count: AuthController.maxDisplayNameLength + 1)] {
+                try await app.testable().test(
+                    .PATCH, "/api/v1/auth/profile",
+                    beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                        req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                        try req.content.encode(UpdateProfileRequest(displayName: badName), as: .json)
+                    },
+                    afterResponse: { (res: XCTHTTPResponse) async throws in
+                        XCTAssertEqual(res.status, .badRequest)
+                        let error = try res.content.decode(APIErrorResponse.self)
+                        XCTAssertEqual(error.code, .validation)
+                    }
+                )
+            }
+
+            let reloaded = try await User.find(userID, on: app.db)
+            XCTAssertEqual(reloaded?.displayName, "Ana", "nome inválido nunca sobrescreve o salvo")
+        }
+    }
 }
