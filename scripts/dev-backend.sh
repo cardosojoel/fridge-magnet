@@ -8,11 +8,33 @@
 # comandos, é o que fecha a promessa de "a stack inteira sobe com dois comandos"
 # (`scripts/dev-db.sh` + este script).
 #
+# Pré-requisito adicional do plano 02-04 (fotos do mural em Cloudflare R2): as quatro
+# variáveis de ambiente `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+# `R2_BUCKET_NAME` (ver `user_setup` do plano 02-04 — Cloudflare Dashboard -> R2) precisam
+# estar exportadas antes de rodar este script; o backend recusa subir sem elas fora de
+# `.testing` (`R2Config.fromEnvironment()`).
+#
 # Rodar este script mais de uma vez não pode falhar — a migration e a geração de chave JWT
 # são idempotentes.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Verificação prévia das variáveis de R2 — falha cedo e nomeando exatamente o que falta, em
+# vez de deixar o backend subir as migrations e só então abortar no boot (R2Config.LoadError).
+missing_r2_vars=()
+for var_name in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET_NAME; do
+  if [ -z "${!var_name:-}" ]; then
+    missing_r2_vars+=("${var_name}")
+  fi
+done
+if [ "${#missing_r2_vars[@]}" -gt 0 ]; then
+  echo "==> Variáveis de R2 ausentes (ver user_setup do plano 02-04, Cloudflare Dashboard -> R2):"
+  for var_name in "${missing_r2_vars[@]}"; do
+    echo "    - ${var_name}"
+  done
+  exit 1
+fi
 
 APP_PASSWORD="${JKLAR_APP_PASSWORD:-REMOVIDO}"
 OWNER_PASSWORD="${JKLAR_OWNER_PASSWORD:-REMOVIDO}"

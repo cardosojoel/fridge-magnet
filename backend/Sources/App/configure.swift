@@ -6,6 +6,7 @@ import FluentPostgresDriver
 import FluentSQL
 import JKLarShared
 import JWT
+import SotoS3
 import Vapor
 import VaporAPNS
 
@@ -177,6 +178,30 @@ func configure(_ app: Application) async throws {
             teamIdentifier: apnsConfig.teamID
         ))
         app.pushService = PushService(client: VaporAPNSPushClient(application: app, topic: apnsConfig.topic))
+    }
+
+    // MARK: Armazenamento de objeto (Cloudflare R2) — plano 02-04.
+    // Mesma disciplina de `app.pushService` acima: fora de `.testing`, a ausência de
+    // qualquer uma das quatro variáveis aborta o boot com mensagem explícita — subir sem
+    // armazenamento configurado significa "funciona até a primeira foto", o pior modo de
+    // falha possível. Em `.testing`, o getter de `app.objectStorageClient` já devolve
+    // `NoopObjectStorageClient()` por padrão; os testes injetam `FakeObjectStorageClient`
+    // explicitamente quando precisam exercitar a lógica de fotos.
+    if app.environment != .testing {
+        let r2Config: R2Config
+        do {
+            r2Config = try R2Config.fromEnvironment()
+        } catch let error as R2Config.LoadError {
+            fatalError("Backend recusando subir: \(error.description)")
+        }
+        let awsClient = AWSClient(
+            credentialProvider: .static(
+                accessKeyId: r2Config.accessKeyID,
+                secretAccessKey: r2Config.secretAccessKey
+            )
+        )
+        app.lifecycle.use(ObjectStorageLifecycleHandler(awsClient: awsClient))
+        app.objectStorageClient = SotoS3ObjectStorageClient(config: r2Config, awsClient: awsClient)
     }
 
     // MARK: Asserção de papel de banco no boot.
