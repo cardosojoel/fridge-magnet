@@ -239,28 +239,22 @@ struct ComposeRecadoView: View {
         .disabled(!viewModel.canAddMorePhotos)
     }
 
-    /// Carrega os bytes de cada item selecionado e detecta o `Content-Type` real pelos bytes
-    /// (via `ImageIO`, mesmo em iOS/macOS) — nunca confia numa extensão de arquivo, que o
+    /// Carrega os bytes de cada item selecionado e lê os dois metadados — o `Content-Type`
+    /// real e a data de captura EXIF (D-11) — dos mesmos bytes já carregados, numa única
+    /// chamada de `loadTransferable` por item; nunca confia numa extensão de arquivo, que o
     /// seletor nem sempre expõe. Item cujo carregamento falha é descartado em silêncio (a
     /// pessoa pode selecionar de novo); nenhum estado quebrado chega a `addPhotos`.
     private static func loadStagedPhotoInputs(from items: [PhotosPickerItem]) async -> [ComposeRecadoViewModel.StagedPhotoInput] {
         var inputs: [ComposeRecadoViewModel.StagedPhotoInput] = []
         for item in items {
             guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
-            inputs.append(.init(data: data, contentType: detectedContentType(for: data)))
+            inputs.append(.init(
+                data: data,
+                contentType: PhotoMetadataReader.contentType(for: data),
+                capturedAt: PhotoMetadataReader.capturedAt(for: data)
+            ))
         }
         return inputs
-    }
-
-    private static func detectedContentType(for data: Data) -> String {
-        guard
-            let source = CGImageSourceCreateWithData(data as CFData, nil),
-            let utTypeIdentifier = CGImageSourceGetType(source) as String?,
-            let mimeType = UTType(utTypeIdentifier)?.preferredMIMEType
-        else {
-            return "image/jpeg"
-        }
-        return mimeType
     }
 
     /// Carrossel quadrado de largura inteira das fotos anexadas — o mesmo componente e a
