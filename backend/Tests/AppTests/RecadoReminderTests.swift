@@ -397,6 +397,253 @@ final class RecadoReminderTests: XCTestCase {
         }
     }
 
+    // MARK: Helpers de rota de fixar/arquivar (Task 3 — molde de `RecadoPinArchiveTests`)
+
+    @discardableResult
+    private static func recadoActionRequest(
+        app: Application,
+        method: HTTPMethod,
+        path: String,
+        bearer: String
+    ) async throws -> (status: HTTPStatus, dto: RecadoDTO?) {
+        var status: HTTPStatus = .internalServerError
+        var dto: RecadoDTO?
+        try await app.testable().test(
+            method, path,
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                status = res.status
+                dto = try? res.content.decode(RecadoDTO.self)
+            }
+        )
+        return (status, dto)
+    }
+
+    private static func getArchived(app: Application, bearer: String) async throws -> [RecadoDTO] {
+        var items: [RecadoDTO]?
+        try await app.testable().test(
+            .GET, "/api/v1/recados/archived",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                XCTAssertEqual(res.status, .ok)
+                items = try res.content.decode([RecadoDTO].self)
+            }
+        )
+        return try XCTUnwrap(items)
+    }
+
+    /// POST com corpo JSON literal — usado pela matriz de combinações inválidas da Task 3,
+    /// para as duas rotas de escrita falarem exatamente o mesmo contrato de rede.
+    private static func postRecadoRawJSON(
+        app: Application,
+        bearer: String,
+        json: String
+    ) async throws -> (status: HTTPStatus, error: APIErrorResponse?) {
+        var capturedStatus: HTTPStatus = .internalServerError
+        var capturedError: APIErrorResponse?
+        try await app.testable().test(
+            .POST, "/api/v1/recados",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+                req.headers.contentType = .json
+                req.body = ByteBuffer(string: json)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                capturedStatus = res.status
+                if res.status != .created {
+                    capturedError = try? res.content.decode(APIErrorResponse.self)
+                }
+            }
+        )
+        return (capturedStatus, capturedError)
+    }
+
+    // MARK: Task 3 — o par em todas as rotas que devolvem recado
+
+    func testEveryRecadoReturningRouteCarriesTheReminderPair() async throws {
+        try await TestSupport.withApp { app in
+            // Autor é adulto NÃO-admin; o admin chama as rotas admin — mesmo molde do
+            // caso de tabela de rotas do plano 02-11.
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 2)
+            let admin = members[0]
+            let author = members[1]
+
+            let eventAt = Self.wholeSecondDate(secondsFromNow: 7200)
+            let offset = 900
+
+            func assertPair(_ dto: RecadoDTO?, route: String) throws {
+                let dto = try XCTUnwrap(dto, "rota \(route) não devolveu DTO")
+                XCTAssertEqual(dto.eventAt, eventAt, "rota \(route): instante do evento idêntico ao gravado")
+                XCTAssertEqual(dto.remindOffsetSeconds, offset, "rota \(route): antecedência idêntica à gravada")
+            }
+
+            // 1. Criar.
+            let posted = try await Self.postRecado(
+                app: app, bearer: author.token, text: "evento da família",
+                eventAt: eventAt, remindOffsetSeconds: offset
+            )
+            XCTAssertEqual(posted.status, .created)
+            try assertPair(posted.dto, route: "criar")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            // 2. Editar (corpo que não fala de lembrete — preserva e devolve o par).
+            let patched = try await Self.patchRecadoRawJSON(
+                app: app, bearer: author.token, recadoID: recadoID,
+                json: #"{"text":"evento da família (editado)","mentionedUserIDs":[]}"#
+            )
+            XCTAssertEqual(patched.status, .ok)
+            try assertPair(patched.dto, route: "editar")
+
+            // 3. Feed — fluxo cronológico.
+            let feedFlow = try await Self.getFeed(app: app, bearer: author.token)
+            try assertPair(feedFlow.items.first { $0.id == recadoID }, route: "feed (fluxo)")
+
+            // 4. Fixar.
+            let pinned = try await Self.recadoActionRequest(
+                app: app, method: .PUT, path: "/api/v1/recados/\(recadoID)/pin", bearer: author.token
+            )
+            XCTAssertEqual(pinned.status, .ok)
+            try assertPair(pinned.dto, route: "fixar")
+
+            // 5. Feed — bloco de fixados (um recado fixado não perde o lembrete por estar
+            // no bloco).
+            let feedPinnedBlock = try await Self.getFeed(app: app, bearer: author.token)
+            try assertPair(feedPinnedBlock.pinned.first { $0.id == recadoID }, route: "feed (bloco de fixados)")
+
+            // 6. Desafixar.
+            let unpinned = try await Self.recadoActionRequest(
+                app: app, method: .DELETE, path: "/api/v1/recados/\(recadoID)/pin", bearer: author.token
+            )
+            XCTAssertEqual(unpinned.status, .ok)
+            try assertPair(unpinned.dto, route: "desafixar")
+
+            // 7. Arquivar.
+            let archived = try await Self.recadoActionRequest(
+                app: app, method: .PUT, path: "/api/v1/recados/\(recadoID)/archive", bearer: author.token
+            )
+            XCTAssertEqual(archived.status, .ok)
+            try assertPair(archived.dto, route: "arquivar")
+
+            // 8. Listagem de arquivados (admin) — saiu do mural, a DTO continua completa.
+            let archivedList = try await Self.getArchived(app: app, bearer: admin.token)
+            try assertPair(archivedList.first { $0.id == recadoID }, route: "listagem de arquivados")
+
+            // 9. Desarquivar (admin).
+            let unarchived = try await Self.recadoActionRequest(
+                app: app, method: .DELETE, path: "/api/v1/recados/\(recadoID)/archive", bearer: admin.token
+            )
+            XCTAssertEqual(unarchived.status, .ok)
+            try assertPair(unarchived.dto, route: "desarquivar")
+        }
+    }
+
+    func testOrphanColumnInEitherDirectionYieldsAbsenceInTheDTO() async throws {
+        try await TestSupport.withApp { app in
+            let (household, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 2)
+            let author = members[1]
+
+            let posted = try await Self.postRecado(app: app, bearer: author.token, text: "sem lembrete")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            // Só `event_at` preenchida — estado que APENAS um UPDATE manual no banco
+            // produz (a rota HTTP, por construção, nunca grava meio par).
+            try await TestSupport.withAppRoleConnection(app: app, householdID: household.id) { sql in
+                try await sql.raw("""
+                    UPDATE recados SET event_at = \(bind: Date().addingTimeInterval(7200)),
+                        remind_offset_seconds = NULL
+                    WHERE id = \(bind: recadoID)
+                    """).run()
+            }
+            var inFeed = try await Self.findInFeed(app: app, bearer: author.token, recadoID: recadoID)
+            XCTAssertNil(inFeed.eventAt, "coluna órfã (só event_at) vira ausência nas DUAS pontas")
+            XCTAssertNil(inFeed.remindOffsetSeconds)
+
+            // Só `remind_offset_seconds` preenchida — a outra direção.
+            try await TestSupport.withAppRoleConnection(app: app, householdID: household.id) { sql in
+                try await sql.raw("""
+                    UPDATE recados SET event_at = NULL, remind_offset_seconds = \(bind: 900)
+                    WHERE id = \(bind: recadoID)
+                    """).run()
+            }
+            inFeed = try await Self.findInFeed(app: app, bearer: author.token, recadoID: recadoID)
+            XCTAssertNil(inFeed.eventAt, "coluna órfã (só remind_offset_seconds) vira ausência nas DUAS pontas")
+            XCTAssertNil(inFeed.remindOffsetSeconds)
+        }
+    }
+
+    func testInvalidReminderCombinationsAreRejectedOnCreateAndUpdate() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 2)
+            let author = members[1]
+
+            // Alvo das edições da matriz — criado sem lembrete, deve continuar sem.
+            let target = try await Self.postRecado(app: app, bearer: author.token, text: "alvo da matriz")
+            let targetID = try XCTUnwrap(target.dto?.id)
+
+            let farFuture = Self.iso(Self.wholeSecondDate(secondsFromNow: 7200))
+            let nearFuture = Self.iso(Self.wholeSecondDate(secondsFromNow: 600))
+            let oneDaySeconds = ReminderOffset.oneDay.rawValue
+
+            // A matriz de combinações inválidas — cada fragmento entra num corpo
+            // completo, contra AS DUAS rotas de escrita.
+            let invalidFragments: [(name: String, fragment: String)] = [
+                ("antecedência fora do conjunto", #""eventAt":"\#(farFuture)","remindOffsetSeconds":600"#),
+                ("antecedência negativa", #""eventAt":"\#(farFuture)","remindOffsetSeconds":-300"#),
+                ("só o instante do evento", #""eventAt":"\#(farFuture)""#),
+                ("só a antecedência", #""remindOffsetSeconds":900"#),
+                ("instante nulo com antecedência preenchida", #""eventAt":null,"remindOffsetSeconds":900"#),
+                ("disparo no passado", #""eventAt":"\#(nearFuture)","remindOffsetSeconds":\#(oneDaySeconds)"#),
+            ]
+
+            for combo in invalidFragments {
+                let createBody = #"{"text":"matriz","mentionedUserIDs":[],\#(combo.fragment)}"#
+                let created = try await Self.postRecadoRawJSON(app: app, bearer: author.token, json: createBody)
+                XCTAssertEqual(created.status, .badRequest, "criar: \(combo.name) deve ser 400")
+                XCTAssertEqual(created.error?.code, .validation, "criar: \(combo.name) com código do projeto")
+
+                let updateBody = #"{"text":"matriz","mentionedUserIDs":[],\#(combo.fragment)}"#
+                let updated = try await Self.patchRecadoRawJSON(
+                    app: app, bearer: author.token, recadoID: targetID, json: updateBody
+                )
+                XCTAssertEqual(updated.status, .badRequest, "editar: \(combo.name) deve ser 400")
+                XCTAssertEqual(updated.error?.code, .validation, "editar: \(combo.name) com código do projeto")
+            }
+
+            // O alvo atravessou a matriz intocado.
+            let untouched = try await Self.findInFeed(app: app, bearer: author.token, recadoID: targetID)
+            XCTAssertNil(untouched.eventAt)
+            XCTAssertNil(untouched.remindOffsetSeconds)
+            XCTAssertEqual(untouched.text, "alvo da matriz")
+
+            // O par VÁLIDO percorre `ReminderOffset.allCases` nas duas rotas — se o
+            // conjunto crescer, este caso continua completo sozinho. Os valores
+            // atravessam a persistência e voltam idênticos: nenhum arredondamento,
+            // nenhuma conversão de unidade pelo caminho.
+            for offset in ReminderOffset.allCases {
+                let eventAt = Self.wholeSecondDate(secondsFromNow: TimeInterval(offset.rawValue) + 3600)
+                let created = try await Self.postRecado(
+                    app: app, bearer: author.token, text: "válido \(offset.rawValue)",
+                    eventAt: eventAt, remindOffsetSeconds: offset.rawValue
+                )
+                XCTAssertEqual(created.status, .created, "criar aceita \(offset.rawValue)s")
+                XCTAssertEqual(created.dto?.eventAt, eventAt)
+                XCTAssertEqual(created.dto?.remindOffsetSeconds, offset.rawValue)
+
+                let updated = try await Self.patchRecadoRawJSON(
+                    app: app, bearer: author.token, recadoID: targetID,
+                    json: #"{"text":"alvo da matriz","mentionedUserIDs":[],"eventAt":"\#(Self.iso(eventAt))","remindOffsetSeconds":\#(offset.rawValue)}"#
+                )
+                XCTAssertEqual(updated.status, .ok, "editar aceita \(offset.rawValue)s")
+                XCTAssertEqual(updated.dto?.eventAt, eventAt)
+                XCTAssertEqual(updated.dto?.remindOffsetSeconds, offset.rawValue)
+            }
+        }
+    }
+
     func testLegacyClientBodyWithoutReminderKeysPreservesStoredReminder() async throws {
         try await TestSupport.withApp { app in
             let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 2)
