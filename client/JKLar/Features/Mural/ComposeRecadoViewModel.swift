@@ -1,6 +1,7 @@
 import Foundation
 import JKLarShared
 import Observation
+import UserNotifications
 
 /// Formulário de compose no caminho de texto (plano 02-05 Task 3) e de fotos/menção (plano
 /// 02-06) — modela tanto a criação de um recado novo quanto a edição do próprio, no molde de
@@ -83,6 +84,30 @@ final class ComposeRecadoViewModel {
     /// sem pino por trás. Nula é "sem localização"; nunca afeta `canSubmit`.
     private(set) var selectedLocation: RecadoLocationDTO?
 
+    /// O par escolhido de lembrete (D-16, plano 02-15) — instante do EVENTO + antecedência
+    /// em segundos, comparável (a pré-carga do modo edição e o teste de "intocado"
+    /// precisam comparar pares), no mesmo espírito de `StagedPhotoInput` acima.
+    struct SelectedReminder: Equatable, Sendable {
+        var eventAt: Date
+        var remindOffsetSeconds: Int
+    }
+
+    /// Lembrete opcional do recado (D-16) — nulo é "sem lembrete"; nunca afeta `canSubmit`
+    /// (lembrete é sempre opcional, como menção e localização).
+    private(set) var selectedReminder: SelectedReminder?
+    /// Marca de "mexeu nesta sessão" — a tradução literal da regra de revalidação do
+    /// `02-UI-SPEC.md` § Addendum 3: a revalidação de "cairia no passado" no envio SÓ vale
+    /// quando o lembrete foi adicionado ou alterado nesta sessão. Sem esta marca, salvar a
+    /// correção de digitação de um recado antigo com lembrete vencido viraria um erro
+    /// permanente.
+    private(set) var reminderTouched = false
+    /// Dica inline de combinação inválida — distinta de `errorMessage` porque o contrato
+    /// manda renderizá-la SOB a linha de lembrete, não no rodapé genérico.
+    private(set) var reminderInvalidHint: String?
+    /// Notificação negada NESTE aparelho — liga o aviso discreto do compose. Só o estado
+    /// negado liga; indeterminado não mostra aviso nenhum, por contrato.
+    private(set) var isNotificationsDenied = false
+
     private let apiClient: APIClient
     private let photoUploadService: PhotoUploadService
     /// Id do recado recém-criado (modo novo) ou o `recadoID` do modo edição — guardado depois
@@ -126,12 +151,16 @@ final class ComposeRecadoViewModel {
         stagedPhotos.contains { $0.uploadState == .uploading }
     }
 
+    private let notificationCenter: any LocalNotificationScheduling
+
     init(
         mode: Mode = .new,
         initialText: String = "",
         initialLocation: RecadoLocationDTO? = nil,
+        initialReminder: SelectedReminder? = nil,
         apiClient: APIClient = APIClient(),
-        photoUploadService: PhotoUploadService = PhotoUploadService()
+        photoUploadService: PhotoUploadService = PhotoUploadService(),
+        notificationCenter: any LocalNotificationScheduling = UNUserNotificationCenter.current()
     ) {
         self.mode = mode
         self.text = initialText
@@ -141,6 +170,25 @@ final class ComposeRecadoViewModel {
         self.selectedLocation = initialLocation
         self.apiClient = apiClient
         self.photoUploadService = photoUploadService
+        self.notificationCenter = notificationCenter
+    }
+
+    // MARK: - Lembrete (D-16, plano 02-15)
+
+    /// Guarda o par devolvido pela folha de configuração — liga a marca de mexeu e limpa
+    /// a dica. Nunca altera a regra de habilitar o envio.
+    func setReminder(eventAt: Date, remindOffsetSeconds: Int) {
+    }
+
+    /// Desfaz a seleção de lembrete antes de postar — edição desfazível, tratamento
+    /// neutro (mesmo precedente de `clearLocation`). Liga a marca de mexeu (limpar É
+    /// mexer: a edição salva depois manda o par explicitamente nulo) e limpa a dica.
+    func clearReminder() {
+    }
+
+    /// Lê o estado de autorização deste aparelho e liga a marca de negado SÓ no estado
+    /// negado — indeterminado não mostra aviso nenhum, por contrato do `02-UI-SPEC.md`.
+    func refreshNotificationAuthorizationState() async {
     }
 
     /// Converte itens já carregados do seletor em `StagedPhoto`, cortando no teto de 10

@@ -543,4 +543,64 @@ enum JKCopy {
         formatter.dateFormat = "HH:mm"
         return formatter
     }()
+
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Compose — add reminder
+    /// button") — o glifo de sino acompanha o botão, nunca faz parte da string.
+    static let muralComposeAddReminderCTA = "Adicionar lembrete"
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Compose — remove
+    /// reminder") — rótulo de acessibilidade do botão de limpar, ícone sem texto visível;
+    /// tratamento neutro, nunca destrutivo (mesmo precedente de remover localização).
+    static let muralComposeRemoveReminderAccessibilityLabel = "Remover lembrete"
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Compose —
+    /// notifications-off notice") — só quando a autorização deste aparelho é negada; o
+    /// recado salva mesmo assim, o aviso explica e nunca bloqueia.
+    static let muralComposeReminderNotificationsOffNotice = "As notificações estão desativadas neste aparelho. O lembrete não vai tocar aqui, mas os outros membros da casa recebem."
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Reminder sheet — title").
+    static let muralReminderSheetTitle = "Lembrete"
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Reminder sheet — event
+    /// picker label").
+    static let muralReminderEventPickerLabel = "Data e hora do evento"
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Reminder sheet — offset
+    /// picker label").
+    static let muralReminderOffsetPickerLabel = "Lembrar"
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Reminder sheet —
+    /// invalid-combination hint") — a MESMA string é reusada inline no compose quando a
+    /// revalidação do envio falha (o disparo passou enquanto a pessoa compunha).
+    static let muralComposeReminderInvalidHint = "Esse lembrete cairia no passado. Ajuste a data ou a antecedência."
+
+    /// Rótulos do seletor de antecedência (linha "Reminder sheet — offset options") — UMA
+    /// função sobre o conjunto fechado compartilhado, nunca seis literais soltos em view.
+    static func muralReminderOffsetLabel(_ offset: ReminderOffset) -> String {
+        switch offset {
+        case .atTime: "Na hora"
+        case .fiveMinutes: "5 min antes"
+        case .fifteenMinutes: "15 min antes"
+        case .thirtyMinutes: "30 min antes"
+        case .oneHour: "1 h antes"
+        case .oneDay: "1 dia antes"
+        }
+    }
+
+    /// Forma inline da antecedência (resumo do campo e linha de evento do recado) — a
+    /// mesma tabela manda: difere da forma do picker SÓ no caso de antecedência zero, que
+    /// fica em minúscula ("na hora"). Deriva da função do picker em vez de repetir os
+    /// seis textos — as duas formas nunca divergem sobre como uma antecedência se escreve.
+    static func muralReminderOffsetInlineLabel(_ offset: ReminderOffset) -> String {
+        offset == .atTime ? muralReminderOffsetLabel(offset).lowercased() : muralReminderOffsetLabel(offset)
+    }
+
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Compose — reminder set
+    /// summary"): "{dd/MM/yyyy HH:mm} · {antecedência inline}".
+    static func muralComposeReminderSummary(eventAt: Date, offset: ReminderOffset) -> String {
+        "\(reminderSummaryDateFormatter.string(from: eventAt)) · \(muralReminderOffsetInlineLabel(offset))"
+    }
+
+    /// Formato `dd/MM/yyyy HH:mm` do resumo do campo de lembrete; locale pt-BR fixo, mesmo
+    /// molde dos formatadores acima.
+    private static let reminderSummaryDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "pt_BR")
+        formatter.dateFormat = "dd/MM/yyyy HH:mm"
+        return formatter
+    }()
 }
