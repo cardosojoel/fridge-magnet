@@ -100,4 +100,65 @@ final class PhotoMetadataReaderTests: XCTestCase {
             "o valor de recuo para bytes não interpretáveis é o mesmo de antes da mudança de casa"
         )
     }
+
+    // MARK: - Regra de exibição da legenda (JKPhotoDateBadge.shouldDisplay, Task 2, D-11)
+    // Mesma unidade de assunto (metadado de data de foto) — casos aqui em vez de um arquivo
+    // de teste novo por função, que seria fragmentação sem ganho.
+
+    /// Constrói um instante no fuso do aparelho via componentes de calendário — a regra de
+    /// D-11 é sobre o **dia local**, então os cenários são declarados em dia/hora locais.
+    private func localDate(year: Int, month: Int, day: Int, hour: Int, minute: Int = 0) throws -> Date {
+        try XCTUnwrap(Calendar.current.date(from: DateComponents(
+            year: year, month: month, day: day, hour: hour, minute: minute
+        )))
+    }
+
+    func testShouldDisplayTrueWhenCaptureDayDiffersFromPostDay() throws {
+        let captured = try localDate(year: 2026, month: 3, day: 12, hour: 10)
+        let posted = try localDate(year: 2026, month: 3, day: 15, hour: 10)
+
+        XCTAssertTrue(JKPhotoDateBadge.shouldDisplay(capturedAt: captured, postedAt: posted))
+    }
+
+    func testShouldDisplayFalseForSameCalendarDayWithDifferentHours() throws {
+        let captured = try localDate(year: 2026, month: 3, day: 12, hour: 8)
+        let posted = try localDate(year: 2026, month: 3, day: 12, hour: 21)
+
+        XCTAssertFalse(
+            JKPhotoDateBadge.shouldDisplay(capturedAt: captured, postedAt: posted),
+            "a comparação é por dia do calendário, não por instante"
+        )
+    }
+
+    func testShouldDisplayTrueForAdjacentDaysMinutesApartAroundMidnight() throws {
+        let captured = try localDate(year: 2026, month: 3, day: 12, hour: 23, minute: 55)
+        let posted = try localDate(year: 2026, month: 3, day: 13, hour: 0, minute: 5)
+
+        XCTAssertTrue(
+            JKPhotoDateBadge.shouldDisplay(capturedAt: captured, postedAt: posted),
+            "dias de calendário diferentes é o critério, não a distância em segundos"
+        )
+    }
+
+    func testShouldDisplayFalseForSameLocalDayEvenWhenUTCDaysDiffer() throws {
+        // 20:00 e 22:00 locais: no fuso do aparelho de desenvolvimento (UTC-3), viram 23:00
+        // e 01:00 em UTC — dias UTC diferentes, mesmo dia local. A regra de D-11 usa o dia
+        // local, então a legenda não aparece; num fuso sem essa divergência o caso degrada
+        // para "mesmo dia, horas diferentes", que continua correto.
+        let captured = try localDate(year: 2026, month: 3, day: 12, hour: 20)
+        let posted = try localDate(year: 2026, month: 3, day: 12, hour: 22)
+
+        XCTAssertFalse(
+            JKPhotoDateBadge.shouldDisplay(capturedAt: captured, postedAt: posted),
+            "mesmo dia no fuso do aparelho — mesmo que os instantes caiam em dias diferentes em UTC"
+        )
+    }
+
+    // MARK: - Cópia da legenda (JKCopy, Task 2)
+
+    func testCapturedAtCaptionFormatsPortugueseLongDayAndMonth() throws {
+        let date = try localDate(year: 2026, month: 3, day: 12, hour: 10)
+
+        XCTAssertEqual(JKCopy.muralPhotoCapturedAtCaption(date), "Tirada em 12 de março")
+    }
 }
