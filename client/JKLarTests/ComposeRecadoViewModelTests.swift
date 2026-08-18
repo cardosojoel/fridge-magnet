@@ -683,6 +683,160 @@ final class ComposeRecadoViewModelTests: XCTestCase {
         XCTAssertNotEqual(body.photos[0].capturedAt, capturedOfOtherPhoto, "nunca a data de outra foto da sessão")
     }
 
+    // MARK: Localização (plano 02-10, D-12)
+
+    func testSelectedLocationStartsNilAndDoesNotAffectCanSubmit() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        XCTAssertNil(sut.selectedLocation, "sem localização até a pessoa escolher uma")
+
+        sut.text = "Com texto"
+        let canSubmitBefore = sut.canSubmit
+        sut.setLocation(name: "Praça da Sé", lat: -23.5503, lng: -46.6339)
+        XCTAssertEqual(sut.canSubmit, canSubmitBefore, "localização é sempre opcional, como menção — não afeta canSubmit")
+
+        sut.clearLocation()
+        XCTAssertEqual(sut.canSubmit, canSubmitBefore, "limpar a localização também não afeta canSubmit")
+    }
+
+    func testSetLocationFillsSelectedLocationWithNameLatLng() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        sut.setLocation(name: "Consultório Dra. Ana", lat: -23.561414, lng: -46.655881)
+
+        XCTAssertEqual(sut.selectedLocation?.text, "Consultório Dra. Ana")
+        XCTAssertEqual(sut.selectedLocation?.lat, -23.561414)
+        XCTAssertEqual(sut.selectedLocation?.lng, -46.655881)
+    }
+
+    func testUpdateLocationTextReplacesTextOnlyPreservingCoordinate() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.setLocation(name: "Consultório Dra. Ana", lat: -23.561414, lng: -46.655881)
+
+        sut.updateLocationText("Consultório Dra. Ana — Sala 302")
+
+        XCTAssertEqual(sut.selectedLocation?.text, "Consultório Dra. Ana — Sala 302")
+        XCTAssertEqual(sut.selectedLocation?.lat, -23.561414, "a coordenada é instantâneo da escolha — sobrevive à edição do rótulo")
+        XCTAssertEqual(sut.selectedLocation?.lng, -46.655881, "nunca re-geocodificada a partir do texto editado")
+    }
+
+    func testUpdateLocationTextWithBlankTextClearsSelectedLocationEntirely() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        sut.setLocation(name: "Praça da Sé", lat: -23.5503, lng: -46.6339)
+        sut.updateLocationText("")
+        XCTAssertNil(sut.selectedLocation, "texto vazio limpa a localização inteira — alinhamento com a regra do servidor (02-08)")
+
+        sut.setLocation(name: "Praça da Sé", lat: -23.5503, lng: -46.6339)
+        sut.updateLocationText("   ")
+        XCTAssertNil(sut.selectedLocation, "só espaço equivale a vazio, mesma regra de normalização do servidor")
+    }
+
+    func testClearLocationLeavesSelectedLocationNil() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.setLocation(name: "Praça da Sé", lat: -23.5503, lng: -46.6339)
+
+        sut.clearLocation()
+
+        XCTAssertNil(sut.selectedLocation)
+    }
+
+    func testSubmitNewModeSendsSelectedLocationInCreateBody() async throws {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Com localização")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        let sut = ComposeRecadoViewModel(mode: .new, apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Com localização"
+        sut.setLocation(name: "Consultório Dra. Ana", lat: -23.561414, lng: -46.655881)
+
+        await sut.submit { _ in }
+
+        let body = await recorder.lastBody
+        let decoded = try JSONDecoder().decode(CreateRecadoRequest.self, from: body ?? Data())
+        XCTAssertEqual(decoded.location?.text, "Consultório Dra. Ana")
+        XCTAssertEqual(decoded.location?.lat, -23.561414)
+        XCTAssertEqual(decoded.location?.lng, -46.655881)
+    }
+
+    func testSubmitEditModeSendsSelectedLocationInUpdateBody() async throws {
+        let recadoID = UUID()
+        let recorder = CallRecorder()
+        let updated = makeRecado(id: recadoID, text: "Editado com localização")
+        let transport = ComposeStubTransport(outcome: .success(updated, status: 200), recorder: recorder)
+        let sut = ComposeRecadoViewModel(
+            mode: .editing(recadoID: recadoID), initialText: "Editado com localização",
+            apiClient: APIClient(transport: transport, baseURL: url())
+        )
+        sut.setLocation(name: "Praça da Sé", lat: -23.5503, lng: -46.6339)
+
+        await sut.submit { _ in }
+
+        let body = await recorder.lastBody
+        let decoded = try JSONDecoder().decode(UpdateRecadoRequest.self, from: body ?? Data())
+        XCTAssertEqual(decoded.location?.text, "Praça da Sé")
+        XCTAssertEqual(decoded.location?.lat, -23.5503)
+        XCTAssertEqual(decoded.location?.lng, -46.6339)
+    }
+
+    func testSubmitWithoutLocationSendsAbsentLocationNeverEmptyObjectNorZeroCoordinate() async throws {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Sem localização")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        let sut = ComposeRecadoViewModel(mode: .new, apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Sem localização"
+
+        await sut.submit { _ in }
+
+        let body = await recorder.lastBody
+        let decoded = try JSONDecoder().decode(CreateRecadoRequest.self, from: body ?? Data())
+        XCTAssertNil(decoded.location)
+        let rawBody = String(decoding: body ?? Data(), as: UTF8.self)
+        XCTAssertFalse(rawBody.contains("\"location\""), "a chave nem aparece no JSON — ausente, não nula nem objeto vazio")
+    }
+
+    func testSelectedLocationSurvivesAGenericSubmitFailure() async {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(mode: .new, apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Vai falhar"
+        sut.setLocation(name: "Consultório Dra. Ana", lat: -23.561414, lng: -46.655881)
+
+        await sut.submit { _ in }
+
+        XCTAssertEqual(sut.errorMessage, JKCopy.muralComposeGenericPublishError)
+        XCTAssertEqual(sut.selectedLocation?.text, "Consultório Dra. Ana", "a pessoa não perde o endereço que escolheu numa falha")
+        XCTAssertEqual(sut.selectedLocation?.lat, -23.561414)
+    }
+
+    func testEditingModeInitialLocationPrefillsAndSurvivesUntouchedSubmit() async throws {
+        // UpdateRecadoRequest.location tem semântica de SUBSTITUIÇÃO (plano 02-08): editar
+        // sem pré-preencher a localização existente a apagaria em silêncio no primeiro
+        // "Salvar" — por isso o modo edição recebe a localização atual do recado.
+        let recadoID = UUID()
+        let recorder = CallRecorder()
+        let updated = makeRecado(id: recadoID, text: "Editado")
+        let transport = ComposeStubTransport(outcome: .success(updated, status: 200), recorder: recorder)
+        let existing = RecadoLocationDTO(text: "Praça da Sé", lat: -23.5503, lng: -46.6339)
+        let sut = ComposeRecadoViewModel(
+            mode: .editing(recadoID: recadoID), initialText: "Editado", initialLocation: existing,
+            apiClient: APIClient(transport: transport, baseURL: url())
+        )
+
+        XCTAssertEqual(sut.selectedLocation?.text, "Praça da Sé", "a localização existente aparece no compose de edição")
+
+        await sut.submit { _ in }
+
+        let body = await recorder.lastBody
+        let decoded = try JSONDecoder().decode(UpdateRecadoRequest.self, from: body ?? Data())
+        XCTAssertEqual(decoded.location?.text, "Praça da Sé", "salvar sem tocar na localização a preserva, nunca a apaga")
+        XCTAssertEqual(decoded.location?.lat, -23.5503)
+        XCTAssertEqual(decoded.location?.lng, -46.6339)
+    }
+
     // MARK: setMentions(_:) (plano 02-06 Task 2)
 
     func testSetMentionsWithThreeMembersSendsAllThreeUserIDsOnSubmit() async {
