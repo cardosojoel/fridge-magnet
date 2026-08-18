@@ -10,6 +10,11 @@ import Vapor
 /// de existência de conta.
 private struct MentionValidationError: Error {}
 
+/// Sinaliza uma localização malformada (texto acima do teto, coordenada fora da faixa ou não
+/// finita) — o handler converte em 400 `validation` (plano 02-08, D-12). Mesmo molde de
+/// `MentionValidationError`: a mensagem final descreve o problema sem ecoar o valor recebido.
+private struct LocationValidationError: Error {}
+
 /// `POST /api/v1/recados`, `GET /api/v1/recados`, `PATCH /api/v1/recados/:recadoID`,
 /// `DELETE /api/v1/recados/:recadoID` — plano 02-01 (MURAL-01 parte texto, MURAL-05),
 /// menções estruturadas + fan-out de push por menção plano 02-02 (MURAL-02, MURAL-03).
@@ -29,6 +34,12 @@ struct RecadoController: RouteCollection {
     /// espírito de `maxTextLength`, teto menor por ser um campo obrigatório e mais curto por
     /// natureza).
     static let maxCommentTextLength = 5000
+
+    /// Guarda de tamanho de request para o rótulo de localização (D-12, plano 02-08, linha
+    /// de DoS do 02-ADDENDUM-RESEARCH.md §Security Domain) — não é limite de UX: 500 é
+    /// ordens de magnitude acima de qualquer nome de lugar real, mesmo raciocínio de
+    /// `maxTextLength`.
+    static let maxLocationTextLength = 500
 
     /// Quantos comentários mais recentes o card do feed mostra (02-UI-SPEC.md).
     static let latestCommentsLimit = 2
@@ -102,6 +113,20 @@ struct RecadoController: RouteCollection {
             )
         }
 
+        // Validação de localização no mesmo bloco de validações que roda ANTES de qualquer
+        // gravação (D-12, T-02-57/T-02-58): uma coordenada inválida recusa a requisição
+        // inteira — nem o recado nem as menções são persistidos.
+        let normalizedLocation: RecadoLocationDTO?
+        do {
+            normalizedLocation = try Self.normalizeLocation(body.location)
+        } catch is LocationValidationError {
+            return try Self.errorResponse(
+                code: .validation,
+                message: "A localização do recado é inválida.",
+                status: .badRequest
+            )
+        }
+
         // Validação de menção ANTES de qualquer gravação (recado ou linha de menção) — um
         // id fora da casa recusa a request inteira, nada é persistido (T-02-09).
         let mentionedUserIDs: [UUID]
@@ -129,6 +154,9 @@ struct RecadoController: RouteCollection {
             text: normalizedText,
             sequence: sequence
         )
+        recado.locationText = normalizedLocation?.text
+        recado.locationLat = normalizedLocation?.lat
+        recado.locationLng = normalizedLocation?.lng
         try await recado.save(on: req.scopedDB)
 
         let recadoID = try recado.requireID()
@@ -271,6 +299,20 @@ struct RecadoController: RouteCollection {
             )
         }
 
+        // Validação de localização DEPOIS da checagem de autoria (T-02-60): um não-autor
+        // recebe o código de não-autor sem que o corpo dele seja sequer interpretado —
+        // inverter essa ordem deixaria um não-autor sondar a validação de um recado alheio.
+        let normalizedLocation: RecadoLocationDTO?
+        do {
+            normalizedLocation = try Self.normalizeLocation(body.location)
+        } catch is LocationValidationError {
+            return try Self.errorResponse(
+                code: .validation,
+                message: "A localização do recado é inválida.",
+                status: .badRequest
+            )
+        }
+
         let requestedMentionIDs: [UUID]
         do {
             requestedMentionIDs = try await Self.resolveHouseholdMemberUserIDs(body.mentionedUserIDs, on: req.scopedDB)
@@ -308,6 +350,12 @@ struct RecadoController: RouteCollection {
         }
 
         recado.text = normalizedText
+        // Substituição, mesma semântica das menções (D-12): editar sem enviar localização
+        // limpa as três colunas — resultado nulo aqui grava `nil` nas três, de propósito,
+        // nunca uma omissão.
+        recado.locationText = normalizedLocation?.text
+        recado.locationLat = normalizedLocation?.lat
+        recado.locationLng = normalizedLocation?.lng
         try await recado.save(on: req.scopedDB)
 
         try await Self.enqueueMentionPushes(
@@ -815,7 +863,13 @@ struct RecadoController: RouteCollection {
             .filter(\.$recado.$id == recadoID)
             .sort(\.$position, .ascending)
             .all()
-            .map { RecadoPhotoRefDTO(id: try $0.requireID(), position: $0.position) }
+            .map {
+                RecadoPhotoRefDTO(
+                    id: try $0.requireID(),
+                    position: $0.position,
+                    capturedAt: Self.resolvedCapturedAt($0)
+                )
+            }
 
         let mentionRows = try await RecadoMention.query(on: database)
             .filter(\.$recado.$id == recadoID)
@@ -851,6 +905,18 @@ struct RecadoController: RouteCollection {
         let isMine = recado.$author.id == requesterID
         let isAdmin = viewerRole == .admin
 
+        // Localização só quando AS TRÊS colunas estão presentes — qualquer combinação
+        // parcial (que só um UPDATE manual no banco produziria) devolve ausência, em vez de
+        // um objeto meio preenchido que a view teria de defender (D-12).
+        let location: RecadoLocationDTO?
+        if let locationText = recado.locationText,
+           let locationLat = recado.locationLat,
+           let locationLng = recado.locationLng {
+            location = RecadoLocationDTO(text: locationText, lat: locationLat, lng: locationLng)
+        } else {
+            location = nil
+        }
+
         return RecadoDTO(
             id: recadoID,
             authorID: recado.$author.id,
@@ -870,8 +936,23 @@ struct RecadoController: RouteCollection {
             archivedAt: recado.archivedAt,
             canPin: isMine || isAdmin,
             canArchive: isMine || isAdmin,
-            canUnarchive: isAdmin
+            canUnarchive: isAdmin,
+            location: location
         )
+    }
+
+    // MARK: Data de exibição de foto (D-11, plano 02-08)
+
+    /// O ÚNICO ponto do servidor onde o fallback de D-11 é resolvido: a data de captura do
+    /// arquivo quando havia metadado plausível, senão a data de criação da linha. Guardar
+    /// `NULL` no banco preserva a informação "não havia metadado" como estado distinto, e
+    /// resolver a exibição só aqui, na borda da DTO, garante que todo cliente — inclusive
+    /// um futuro cliente não-iOS — veja o mesmo valor sem ter de lembrar da regra
+    /// (02-ADDENDUM-RESEARCH.md Pitfall 6). Visibilidade interna (não `private`) de
+    /// propósito: `RecadoPhotoController.confirm` monta `ConfirmedPhotoDTO` com este mesmo
+    /// helper — duas cópias da regra divergiriam.
+    static func resolvedCapturedAt(_ photo: RecadoPhoto) -> Date {
+        photo.capturedAt ?? photo.createdAt ?? Date()
     }
 
     // MARK: Mapeamento RecadoComment → CommentDTO
@@ -1069,6 +1150,30 @@ struct RecadoController: RouteCollection {
             pending.append(PendingMentionPush(deviceTokenID: tokenID, title: MuralPushCopy.mentionTitle, body: body))
         }
         req.pendingMentionPushes = pending
+    }
+
+    /// Valida e normaliza a localização opcional (D-12, plano 02-08) — chamada ANTES de
+    /// qualquer gravação, tanto em `create` quanto em `update`:
+    /// - Nulo entra, nulo sai.
+    /// - Texto vazio depois de aparar → nulo (a localização INTEIRA é tratada como ausente,
+    ///   exatamente o precedente de `normalizeText` — não existe pino sem rótulo).
+    /// - Texto acima de `maxLocationTextLength`, coordenada não finita ou fora de
+    ///   -90..90 / -180..180 → lança `LocationValidationError` (T-02-57/T-02-58), que o
+    ///   handler converte em 400 `validation` sem ecoar o valor recebido.
+    private static func normalizeLocation(_ location: RecadoLocationDTO?) throws -> RecadoLocationDTO? {
+        guard let location else { return nil }
+        let trimmed = location.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.count <= Self.maxLocationTextLength else {
+            throw LocationValidationError()
+        }
+        guard location.lat.isFinite, location.lng.isFinite,
+              (-90.0...90.0).contains(location.lat),
+              (-180.0...180.0).contains(location.lng)
+        else {
+            throw LocationValidationError()
+        }
+        return RecadoLocationDTO(text: trimmed, lat: location.lat, lng: location.lng)
     }
 
     /// Trim + normaliza string vazia para `nil` (D-01: um recado sem texto tem `text ==

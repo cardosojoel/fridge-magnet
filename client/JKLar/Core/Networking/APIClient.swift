@@ -296,11 +296,12 @@ actor APIClient {
     }
 
     /// `POST /api/v1/recados/:recadoID/photos/confirm` (plano 02-06, `RecadoPhotoController.confirm`
-    /// do plano 02-04) — só as chaves que o cliente diz terem chegado ao armazenamento; o
-    /// servidor revalida cada uma (`HEAD`) antes de gravar qualquer linha (02-RESEARCH.md
+    /// do plano 02-04) — só as fotos cujas chaves o cliente diz terem chegado ao
+    /// armazenamento, cada uma com a própria data de captura (D-11, plano 02-08); o
+    /// servidor revalida cada chave (`HEAD`) antes de gravar qualquer linha (02-RESEARCH.md
     /// Pitfall 3). Modo de falha tipado esperado: `.photoNotUploaded` (409).
-    func confirmPhotoUploads(recadoID: UUID, objectKeys: [String]) async throws -> [ConfirmedPhotoDTO] {
-        let body = try Self.encoder.encode(ConfirmPhotoUploadRequest(objectKeys: objectKeys))
+    func confirmPhotoUploads(recadoID: UUID, photos: [ConfirmPhotoUploadItem]) async throws -> [ConfirmedPhotoDTO] {
+        let body = try Self.encoder.encode(ConfirmPhotoUploadRequest(photos: photos))
         let (data, response) = try await send(
             path: "api/v1/recados/\(recadoID.uuidString)/photos/confirm", method: "POST", body: body, requiresAuth: true
         )

@@ -15,7 +15,8 @@ final class RecadoControllerTests: XCTestCase {
         bearer: String,
         rawBody: [String: String]? = nil,
         text: String? = nil,
-        mentionedUserIDs: [UUID] = []
+        mentionedUserIDs: [UUID] = [],
+        location: RecadoLocationDTO? = nil
     ) async throws -> (status: HTTPStatus, dto: RecadoDTO?, error: APIErrorResponse?) {
         var capturedStatus: HTTPStatus = .internalServerError
         var capturedDTO: RecadoDTO?
@@ -28,7 +29,8 @@ final class RecadoControllerTests: XCTestCase {
                     try req.content.encode(rawBody, as: .json)
                 } else {
                     try req.content.encode(
-                        CreateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs), as: .json
+                        CreateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs, location: location),
+                        as: .json
                     )
                 }
             },
@@ -75,7 +77,8 @@ final class RecadoControllerTests: XCTestCase {
         bearer: String,
         recadoID: UUID,
         text: String?,
-        mentionedUserIDs: [UUID] = []
+        mentionedUserIDs: [UUID] = [],
+        location: RecadoLocationDTO? = nil
     ) async throws -> (status: HTTPStatus, dto: RecadoDTO?, error: APIErrorResponse?) {
         var capturedStatus: HTTPStatus = .internalServerError
         var capturedDTO: RecadoDTO?
@@ -84,7 +87,10 @@ final class RecadoControllerTests: XCTestCase {
             .PATCH, "/api/v1/recados/\(recadoID.uuidString)",
             beforeRequest: { (req: inout XCTHTTPRequest) async throws in
                 req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
-                try req.content.encode(UpdateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs), as: .json)
+                try req.content.encode(
+                    UpdateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs, location: location),
+                    as: .json
+                )
             },
             afterResponse: { (res: XCTHTTPResponse) async throws in
                 capturedStatus = res.status
@@ -1034,5 +1040,216 @@ final class RecadoControllerTests: XCTestCase {
             }
             XCTAssertEqual(mentionCount, 0, "as menções desse comentário também somem")
         }
+    }
+
+    // MARK: Plano 02-08 Task 2 — localização opcional do recado (D-12)
+
+    func testCreateWithLocationRoundTripsInResponseAndFeed() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+
+            let posted = try await Self.postRecado(
+                app: app, bearer: author.token, text: "praia hoje",
+                location: RecadoLocationDTO(text: "  Praia do Rosa  ", lat: -28.1266, lng: -48.6414)
+            )
+            XCTAssertEqual(posted.status, .created)
+            let location = try XCTUnwrap(posted.dto?.location)
+            XCTAssertEqual(location.text, "Praia do Rosa", "o texto volta aparado")
+            XCTAssertEqual(location.lat, -28.1266)
+            XCTAssertEqual(location.lng, -48.6414)
+
+            let feed = try await Self.getFeed(app: app, bearer: author.token)
+            let feedLocation = try XCTUnwrap(feed.page?.items.first?.location)
+            XCTAssertEqual(feedLocation.text, "Praia do Rosa")
+            XCTAssertEqual(feedLocation.lat, -28.1266)
+            XCTAssertEqual(feedLocation.lng, -48.6414)
+        }
+    }
+
+    func testCreateWithoutLocationReturnsAbsentLocation() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+
+            let posted = try await Self.postRecado(app: app, bearer: author.token, text: "sem lugar")
+            XCTAssertEqual(posted.status, .created)
+            XCTAssertNil(posted.dto?.location, "ausência é ausência — nunca objeto vazio ou coordenada zero")
+
+            let feed = try await Self.getFeed(app: app, bearer: author.token)
+            XCTAssertNil(feed.page?.items.first?.location)
+        }
+    }
+
+    func testUpdateReplacingLocationSubstitutesIt() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+            let posted = try await Self.postRecado(
+                app: app, bearer: author.token, text: "mudou o lugar",
+                location: RecadoLocationDTO(text: "Casa da Vó", lat: -27.5954, lng: -48.5480)
+            )
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            let patched = try await Self.patchRecado(
+                app: app, bearer: author.token, recadoID: recadoID, text: "mudou o lugar",
+                location: RecadoLocationDTO(text: "Parque da Cidade", lat: -27.5800, lng: -48.5100)
+            )
+            XCTAssertEqual(patched.status, .ok)
+            let location = try XCTUnwrap(patched.dto?.location)
+            XCTAssertEqual(location.text, "Parque da Cidade")
+            XCTAssertEqual(location.lat, -27.5800)
+            XCTAssertEqual(location.lng, -48.5100)
+        }
+    }
+
+    func testUpdateWithoutLocationClearsIt() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+            let posted = try await Self.postRecado(
+                app: app, bearer: author.token, text: "tinha lugar",
+                location: RecadoLocationDTO(text: "Mercado", lat: -27.59, lng: -48.55)
+            )
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            // Substituição, mesma semântica das menções: editar sem enviar localização limpa
+            // as três colunas.
+            let patched = try await Self.patchRecado(
+                app: app, bearer: author.token, recadoID: recadoID, text: "tinha lugar"
+            )
+            XCTAssertEqual(patched.status, .ok)
+            XCTAssertNil(patched.dto?.location, "editar sem localização limpa as três colunas")
+
+            let feed = try await Self.getFeed(app: app, bearer: author.token)
+            XCTAssertNil(feed.page?.items.first?.location)
+        }
+    }
+
+    func testCreateWithOutOfRangeLatitudeIsRejectedWithoutPersistingAnything() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+
+            let posted = try await Self.postRecado(
+                app: app, bearer: author.token, text: "não pode entrar",
+                location: RecadoLocationDTO(text: "Lugar impossível", lat: 90.5, lng: 0)
+            )
+            XCTAssertEqual(posted.status, .badRequest)
+            XCTAssertEqual(posted.error?.code, .validation)
+
+            let feed = try await Self.getFeed(app: app, bearer: author.token)
+            XCTAssertEqual(feed.page?.items.count, 0, "coordenada inválida não persiste nem o texto do recado")
+        }
+    }
+
+    func testCreateWithOutOfRangeLongitudeIsRejected() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+
+            let posted = try await Self.postRecado(
+                app: app, bearer: author.token, text: "não pode entrar",
+                location: RecadoLocationDTO(text: "Lugar impossível", lat: 0, lng: -180.5)
+            )
+            XCTAssertEqual(posted.status, .badRequest)
+            XCTAssertEqual(posted.error?.code, .validation)
+        }
+    }
+
+    func testCreateWithNonFiniteCoordinateIsRejected() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+
+            // 1e999 estoura Double na decodificação — JSON não tem literal NaN/Infinity, e
+            // este é o único jeito de um corpo real tentar entregar um valor não finito.
+            // Recusado com 400 antes de qualquer gravação, seja na decodificação, seja na
+            // validação de faixa.
+            let status = try await Self.postRecadoRawJSON(
+                app: app, bearer: author.token,
+                json: #"{"text":"nan","location":{"text":"Lugar","lat":1e999,"lng":0}}"#
+            )
+            XCTAssertEqual(status, .badRequest)
+
+            let feed = try await Self.getFeed(app: app, bearer: author.token)
+            XCTAssertEqual(feed.page?.items.count, 0, "valor não finito nunca chega a gravar nada")
+        }
+    }
+
+    func testCreateWithLocationTextOverLimitIsRejected() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+
+            let hugeText = String(repeating: "x", count: 501)
+            let posted = try await Self.postRecado(
+                app: app, bearer: author.token, text: "texto enorme de lugar",
+                location: RecadoLocationDTO(text: hugeText, lat: 0, lng: 0)
+            )
+            XCTAssertEqual(posted.status, .badRequest)
+            XCTAssertEqual(posted.error?.code, .validation)
+
+            let feed = try await Self.getFeed(app: app, bearer: author.token)
+            XCTAssertEqual(feed.page?.items.count, 0)
+        }
+    }
+
+    func testCreateWithBlankLocationTextTreatsLocationAsAbsent() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+
+            // Mesmo precedente de normalizeText: vazio depois de aparar não é erro, é
+            // ausência — as três colunas ficam nulas e o recado é criado normalmente.
+            let posted = try await Self.postRecado(
+                app: app, bearer: author.token, text: "rótulo em branco",
+                location: RecadoLocationDTO(text: "   ", lat: -27.59, lng: -48.55)
+            )
+            XCTAssertEqual(posted.status, .created)
+            XCTAssertNil(posted.dto?.location, "texto vazio faz a localização INTEIRA ser tratada como ausente")
+        }
+    }
+
+    func testNonAuthorUpdateGetsNotAuthorBeforeLocationIsInterpreted() async throws {
+        try await TestSupport.withApp { app in
+            let (_, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 2)
+            let author = members[0]
+            let otherMember = members[1]
+            let posted = try await Self.postRecado(app: app, bearer: author.token, text: "recado do autor")
+            let recadoID = try XCTUnwrap(posted.dto?.id)
+
+            // O corpo do não-autor carrega uma localização INVÁLIDA de propósito: se a
+            // resposta fosse .validation, a rota teria interpretado o corpo antes de checar
+            // autoria — um não-autor poderia sondar a validação de um recado alheio.
+            let patched = try await Self.patchRecado(
+                app: app, bearer: otherMember.token, recadoID: recadoID, text: "invadindo",
+                location: RecadoLocationDTO(text: "Lugar", lat: 999, lng: 999)
+            )
+            XCTAssertEqual(patched.status, .forbidden)
+            XCTAssertEqual(patched.error?.code, .notAuthor, "autoria vem ANTES de qualquer interpretação do corpo")
+        }
+    }
+
+    /// Corpo JSON cru — usado só pelo caso de coordenada não finita, que nenhum
+    /// `JSONEncoder` consegue produzir a partir de um `Double` de verdade.
+    private static func postRecadoRawJSON(
+        app: Application,
+        bearer: String,
+        json: String
+    ) async throws -> HTTPStatus {
+        var capturedStatus: HTTPStatus = .internalServerError
+        try await app.testable().test(
+            .POST, "/api/v1/recados",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+                req.headers.contentType = .json
+                req.body = ByteBuffer(string: json)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                capturedStatus = res.status
+            }
+        )
+        return capturedStatus
     }
 }

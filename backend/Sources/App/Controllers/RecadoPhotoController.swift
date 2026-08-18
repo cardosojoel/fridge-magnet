@@ -172,11 +172,22 @@ struct RecadoPhotoController: RouteCollection {
 
         let body = try req.content.decode(ConfirmPhotoUploadRequest.self)
 
+        // `capturedAtByKey` é montado ANTES de qualquer filtragem, chaveado por `objectKey`
+        // — o filtro de retentativa idempotente (`newKeys`, abaixo) não tem como deslocar
+        // uma data para a foto errada, que é exatamente o furo de um array paralelo
+        // indexado por posição (02-ADDENDUM-RESEARCH.md Pitfall 3). Chave repetida no mesmo
+        // corpo fica com a última ocorrência (regra explícita, variante de `Dictionary` que
+        // resolve colisão — nunca a que aborta em chave duplicada).
+        let capturedAtByKey = Dictionary(
+            body.photos.map { ($0.objectKey, Self.plausibleCapturedAt($0.capturedAt)) },
+            uniquingKeysWith: { _, last in last }
+        )
+
         // Cada chave precisa bater com o formato esperado (casa + recado corretos, sufixo
         // UUID válido) ANTES de qualquer consulta ao armazenamento — uma chave de outro
         // recado, ou inventada, nunca chega a virar consulta (T-02-27: sem isso o confirm
         // seria um oráculo de existência de objeto alheio).
-        for key in body.objectKeys {
+        for key in body.photos.map(\.objectKey) {
             guard RecadoPhotoObjectKey.validate(key, householdID: context.householdID, recadoID: recadoID) else {
                 return try Self.errorResponse(
                     code: .validation,
@@ -194,7 +205,7 @@ struct RecadoPhotoController: RouteCollection {
         // Chave já confirmada antes é ignorada em silêncio — confirm repetido não duplica
         // linha (a constraint unique(object_key) é a rede de segurança, não o mecanismo
         // primário).
-        let newKeys = body.objectKeys.filter { !existingKeys.contains($0) }
+        let newKeys = body.photos.map(\.objectKey).filter { !existingKeys.contains($0) }
 
         guard existingPhotos.count + newKeys.count <= Self.maxPhotosPerRecado else {
             return try Self.errorResponse(
@@ -206,10 +217,17 @@ struct RecadoPhotoController: RouteCollection {
 
         guard !newKeys.isEmpty else {
             // Nada de novo para confirmar (todas as chaves já existiam) — idempotente,
-            // devolve o estado atual sem gravar nada.
+            // devolve o estado atual sem gravar nada. `capturedAt` sempre pelo helper
+            // único de fallback — duas cópias da regra divergiriam (Pitfall 6).
             let dtos = try existingPhotos
                 .sorted { $0.position < $1.position }
-                .map { ConfirmedPhotoDTO(id: try $0.requireID(), position: $0.position) }
+                .map {
+                    ConfirmedPhotoDTO(
+                        id: try $0.requireID(),
+                        position: $0.position,
+                        capturedAt: RecadoController.resolvedCapturedAt($0)
+                    )
+                }
             return try Self.jsonResponse(dtos, status: .created)
         }
 
@@ -244,14 +262,23 @@ struct RecadoPhotoController: RouteCollection {
                 objectKey: key,
                 position: nextPosition,
                 contentType: metadata.contentType,
-                byteSize: metadata.byteSize
+                byteSize: metadata.byteSize,
+                // Achata o opcional duplo: chave ausente do dicionário E valor nulo
+                // significam a mesma coisa — sem metadado de captura.
+                capturedAt: capturedAtByKey[key] ?? nil
             )
             try await photo.save(on: req.scopedDB)
             savedPhotos.append(photo)
             nextPosition += 1
         }
 
-        let dtos = try savedPhotos.map { ConfirmedPhotoDTO(id: try $0.requireID(), position: $0.position) }
+        let dtos = try savedPhotos.map {
+            ConfirmedPhotoDTO(
+                id: try $0.requireID(),
+                position: $0.position,
+                capturedAt: RecadoController.resolvedCapturedAt($0)
+            )
+        }
         return try Self.jsonResponse(dtos, status: .created)
     }
 
@@ -360,6 +387,19 @@ struct RecadoPhotoController: RouteCollection {
     }
 
     // MARK: Helpers privados
+
+    /// Rejeita o absurdo, aceita o resto (D-11, T-02-56): o servidor nunca viu os bytes da
+    /// foto e não tem como verificar a data de captura declarada — a única defesa razoável
+    /// é gravar `NULL` (que cai no fallback de exibição) para valor anterior a 1970 ou mais
+    /// de 24h à frente do relógio do servidor, em vez de poluir a coluna de timestamp. A
+    /// foto continua sendo confirmada normalmente: data implausível nunca é motivo de
+    /// recusa, porque o metadado é só de exibição.
+    private static func plausibleCapturedAt(_ date: Date?) -> Date? {
+        guard let date else { return nil }
+        guard date >= Date(timeIntervalSince1970: 0) else { return nil }
+        guard date <= Date().addingTimeInterval(24 * 60 * 60) else { return nil }
+        return date
+    }
 
     private static func errorResponse(code: APIErrorCode, message: String, status: HTTPStatus) throws -> Response {
         try Self.jsonResponse(APIErrorResponse(code: code, message: message), status: status)

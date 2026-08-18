@@ -30,10 +30,40 @@ public enum ReactionKind: String, Codable, Sendable, CaseIterable {
 public struct RecadoPhotoRefDTO: Codable, Sendable {
     public var id: UUID
     public var position: Int
+    /// Data de exibição da foto (D-11, plano 02-08) — **já resolvida pelo servidor** em
+    /// `RecadoController.resolvedCapturedAt`: a data de captura do arquivo quando havia
+    /// metadado plausível, senão a data de criação da linha. Não opcional de propósito:
+    /// a ausência de metadado já foi resolvida na borda da DTO, então nenhuma view precisa
+    /// de um `??` de fallback (02-ADDENDUM-RESEARCH.md Pitfall 6). O valor padrão no `init`
+    /// existe só para os pontos de construção anteriores a este campo (fixtures de teste
+    /// das ondas 1-4) — o servidor sempre passa explicitamente.
+    public var capturedAt: Date
 
-    public init(id: UUID, position: Int) {
+    public init(id: UUID, position: Int, capturedAt: Date = Date()) {
         self.id = id
         self.position = position
+        self.capturedAt = capturedAt
+    }
+}
+
+/// Localização opcional de um recado (D-12, plano 02-08) — um rótulo e uma coordenada,
+/// nada além disso.
+///
+/// Duas propriedades a definem:
+/// - É um **instantâneo**: a coordenada é capturada no momento de compor (busca MapKit no
+///   aparelho) e nunca mais reconsultada — nada de re-geocodificar a cada render
+///   (02-ADDENDUM-RESEARCH.md, Anti-Patterns).
+/// - `text` é o rótulo que a pessoa escolheu, que pode ter sido editado à mão depois de
+///   escolher o pino (Open Question 2) — nunca é derivado de volta da coordenada.
+public struct RecadoLocationDTO: Codable, Sendable {
+    public var text: String
+    public var lat: Double
+    public var lng: Double
+
+    public init(text: String, lat: Double, lng: Double) {
+        self.text = text
+        self.lat = lat
+        self.lng = lng
     }
 }
 
@@ -137,6 +167,10 @@ public struct RecadoDTO: Codable, Sendable {
     /// arquivou o próprio recado NÃO o recupera sozinho, decisão explícita do usuário).
     /// Calculado no servidor; sinal de interface, nunca a linha de defesa.
     public var canUnarchive: Bool
+    /// Localização opcional do recado (D-12, plano 02-08) — ausente é ausente: o servidor
+    /// só devolve o objeto quando as três colunas estão preenchidas, nunca um objeto vazio
+    /// ou com coordenada zero.
+    public var location: RecadoLocationDTO?
 
     // Os cinco parâmetros novos entram com valor padrão de propósito: `RecadoDTO` é
     // construído em dezenas de pontos de teste (backend e cliente, ondas 1 a 4) e um
@@ -162,7 +196,8 @@ public struct RecadoDTO: Codable, Sendable {
         archivedAt: Date? = nil,
         canPin: Bool = false,
         canArchive: Bool = false,
-        canUnarchive: Bool = false
+        canUnarchive: Bool = false,
+        location: RecadoLocationDTO? = nil
     ) {
         self.id = id
         self.authorID = authorID
@@ -183,6 +218,7 @@ public struct RecadoDTO: Codable, Sendable {
         self.canPin = canPin
         self.canArchive = canArchive
         self.canUnarchive = canUnarchive
+        self.location = location
     }
 }
 
@@ -242,15 +278,22 @@ public struct RecadoFeedPage: Codable, Sendable {
 public struct CreateRecadoRequest: Codable, Sendable {
     public var text: String?
     public var mentionedUserIDs: [UUID]
+    /// Localização opcional (D-12, plano 02-08) — chave ausente do JSON é localização
+    /// ausente, nunca erro. Os TRÊS lugares (propriedade, `CodingKeys`, `init(from:)`)
+    /// carregam o campo: um corpo real que não passasse pelo `init(from:)` atualizado
+    /// decodificaria a localização como nula silenciosamente.
+    public var location: RecadoLocationDTO?
 
-    public init(text: String?, mentionedUserIDs: [UUID] = []) {
+    public init(text: String?, mentionedUserIDs: [UUID] = [], location: RecadoLocationDTO? = nil) {
         self.text = text
         self.mentionedUserIDs = mentionedUserIDs
+        self.location = location
     }
 
     private enum CodingKeys: String, CodingKey {
         case text
         case mentionedUserIDs
+        case location
     }
 
     // Init manual (não synthesized): `mentionedUserIDs` precisa decodificar como `[]` quando
@@ -261,6 +304,7 @@ public struct CreateRecadoRequest: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.text = try container.decodeIfPresent(String.self, forKey: .text)
         self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
+        self.location = try container.decodeIfPresent(RecadoLocationDTO.self, forKey: .location)
     }
 }
 
@@ -272,15 +316,21 @@ public struct CreateRecadoRequest: Codable, Sendable {
 public struct UpdateRecadoRequest: Codable, Sendable {
     public var text: String?
     public var mentionedUserIDs: [UUID]
+    /// Localização opcional (D-12) — semântica de SUBSTITUIÇÃO, igual à de
+    /// `mentionedUserIDs`: editar sem enviar localização limpa a localização do recado,
+    /// nunca a preserva. Mesmo contrato de três lugares de `CreateRecadoRequest.location`.
+    public var location: RecadoLocationDTO?
 
-    public init(text: String?, mentionedUserIDs: [UUID] = []) {
+    public init(text: String?, mentionedUserIDs: [UUID] = [], location: RecadoLocationDTO? = nil) {
         self.text = text
         self.mentionedUserIDs = mentionedUserIDs
+        self.location = location
     }
 
     private enum CodingKeys: String, CodingKey {
         case text
         case mentionedUserIDs
+        case location
     }
 
     /// Mesma razão de `CreateRecadoRequest.init(from:)`: `mentionedUserIDs` ausente no JSON
@@ -289,6 +339,7 @@ public struct UpdateRecadoRequest: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.text = try container.decodeIfPresent(String.self, forKey: .text)
         self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
+        self.location = try container.decodeIfPresent(RecadoLocationDTO.self, forKey: .location)
     }
 }
 

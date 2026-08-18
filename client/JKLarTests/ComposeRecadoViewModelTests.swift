@@ -102,8 +102,16 @@ private struct ComposeStubTransport: APIClientTransport {
     private func encodeConfirm(request: URLRequest, url: URL) throws -> (Data, HTTPURLResponse) {
         switch confirmOutcome {
         case .success:
-            let body = try JSONDecoder().decode(ConfirmPhotoUploadRequest.self, from: request.httpBody ?? Data())
-            let dtos = body.objectKeys.enumerated().map { index, _ in ConfirmedPhotoDTO(id: UUID(), position: index) }
+            // Decoder com datas ISO8601, espelhando o servidor real: o `APIClient` codifica
+            // o corpo com datas ISO8601, e `ConfirmPhotoUploadItem.capturedAt` (plano 02-08)
+            // é um `Date` — um `JSONDecoder()` cru falharia no primeiro corpo com data real
+            // (plano 02-09), exatamente o furo que o `ServerWire.encoder` já documenta.
+            let bodyDecoder = JSONDecoder()
+            bodyDecoder.dateDecodingStrategy = .iso8601
+            let body = try bodyDecoder.decode(ConfirmPhotoUploadRequest.self, from: request.httpBody ?? Data())
+            let dtos = body.photos.enumerated().map { index, item in
+                ConfirmedPhotoDTO(id: UUID(), position: index, capturedAt: item.capturedAt ?? Date())
+            }
             let data = try ServerWire.encoder.encode(dtos)
             return (data, HTTPURLResponse(url: url, statusCode: 201, httpVersion: nil, headerFields: nil)!)
         case .apiError(let code, let status):

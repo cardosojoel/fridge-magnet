@@ -40,6 +40,23 @@ final class Recado: Model, @unchecked Sendable {
     @OptionalField(key: "archived_at")
     var archivedAt: Date?
 
+    /// Rótulo da localização opcional do recado (D-12, plano 02-08) — coluna aditiva de
+    /// `AddPhotoCapturedAtAndRecadoLocation`. As três colunas de localização andam juntas:
+    /// ou as três estão preenchidas (localização presente) ou as três são nulas (ausente) —
+    /// invariante mantida por `RecadoController.normalizeLocation`, nunca pelo schema.
+    /// Atribuída por propriedade pelos handlers (`create`/`update`), nunca pelo `init` —
+    /// mesmo padrão de `pinnedAt`/`archivedAt`.
+    @OptionalField(key: "location_text")
+    var locationText: String?
+
+    /// Latitude do instantâneo de localização (D-12) — ver `locationText`.
+    @OptionalField(key: "location_lat")
+    var locationLat: Double?
+
+    /// Longitude do instantâneo de localização (D-12) — ver `locationText`.
+    @OptionalField(key: "location_lng")
+    var locationLng: Double?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -93,6 +110,15 @@ final class RecadoPhoto: Model, @unchecked Sendable {
     @Field(key: "byte_size")
     var byteSize: Int64
 
+    /// Data de captura declarada pelo cliente no confirm (D-11, plano 02-08) — coluna
+    /// aditiva de `AddPhotoCapturedAtAndRecadoLocation`, `nil` quando o arquivo não tinha
+    /// metadado (ou o valor era implausível, ver `RecadoPhotoController.plausibleCapturedAt`).
+    /// É metadado **só de exibição**: o servidor nunca viu os bytes e não tem como
+    /// verificá-lo, então nunca entra em decisão de autorização, nunca em filtro e nunca em
+    /// ordenação — a ordem do feed é `sequence`, a do carrossel é `position` (T-02-56).
+    @OptionalField(key: "captured_at")
+    var capturedAt: Date?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -105,7 +131,8 @@ final class RecadoPhoto: Model, @unchecked Sendable {
         objectKey: String,
         position: Int,
         contentType: String,
-        byteSize: Int64
+        byteSize: Int64,
+        capturedAt: Date? = nil
     ) {
         self.id = id
         self.$household.id = householdID
@@ -114,6 +141,7 @@ final class RecadoPhoto: Model, @unchecked Sendable {
         self.position = position
         self.contentType = contentType
         self.byteSize = byteSize
+        self.capturedAt = capturedAt
     }
 }
 

@@ -202,7 +202,12 @@ final class ComposeRecadoViewModel {
             setUploadState(photoID: photo.id, to: .uploading)
             try await photoUploadService.upload(data: photo.data, to: upload.uploadURL, contentType: photo.contentType)
             setUploadState(photoID: photo.id, to: .uploaded(objectKey: upload.objectKey))
-            _ = try await apiClient.confirmPhotoUploads(recadoID: recadoID, objectKeys: [upload.objectKey])
+            // capturedAt ausente por enquanto — o plano 02-09 lê o metadado EXIF do arquivo
+            // e preenche o valor real neste ponto.
+            _ = try await apiClient.confirmPhotoUploads(
+                recadoID: recadoID,
+                photos: [ConfirmPhotoUploadItem(objectKey: upload.objectKey, capturedAt: nil)]
+            )
             if !stagedPhotos.contains(where: { $0.uploadState == .failed }) {
                 errorMessage = nil
             }
@@ -251,14 +256,17 @@ final class ComposeRecadoViewModel {
         }
 
         do {
-            _ = try await apiClient.confirmPhotoUploads(recadoID: recadoID, objectKeys: uploadedKeys)
+            // capturedAt ausente por enquanto — o plano 02-09 lê o metadado EXIF do arquivo
+            // e preenche o valor real neste ponto.
+            let items = uploadedKeys.map { ConfirmPhotoUploadItem(objectKey: $0, capturedAt: nil) }
+            _ = try await apiClient.confirmPhotoUploads(recadoID: recadoID, photos: items)
             if anyUploadFailed {
                 errorMessage = JKCopy.muralComposePhotoUploadPartialFailure
             }
         } catch {
             // Confirm recusado (ex.: .photoNotUploaded, T-02-45) — as chaves desta chamada
             // voltam para `failed`, a falha nunca é silenciosa.
-            markFailed(objectKeys: uploadedKeys)
+            markFailed(keys: uploadedKeys)
             errorMessage = JKCopy.muralComposePhotoUploadPartialFailure
         }
     }
@@ -268,9 +276,9 @@ final class ComposeRecadoViewModel {
         stagedPhotos[index].uploadState = state
     }
 
-    private func markFailed(objectKeys: [String]) {
+    private func markFailed(keys: [String]) {
         for index in stagedPhotos.indices {
-            if case .uploaded(let key) = stagedPhotos[index].uploadState, objectKeys.contains(key) {
+            if case .uploaded(let key) = stagedPhotos[index].uploadState, keys.contains(key) {
                 stagedPhotos[index].uploadState = .failed
             }
         }

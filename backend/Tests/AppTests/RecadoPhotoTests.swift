@@ -357,6 +357,184 @@ final class RecadoPhotoTests: XCTestCase {
         }
     }
 
+    // MARK: Plano 02-08 Task 1 — data de captura (D-11)
+
+    func testConfirmWithCapturedAtPersistsAndReturnsSameInstant() async throws {
+        try await TestSupport.withApp { app in
+            let fake = FakeObjectStorageClient()
+            app.objectStorageClient = fake
+            let (household, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "foto com data")
+
+            let presignResult = try await Self.postPresign(
+                app: app, bearer: author.token, recadoID: recado.id,
+                slots: [PhotoUploadSlotRequest(contentType: "image/jpeg", byteSize: 1_000)]
+            )
+            let key = try XCTUnwrap(presignResult.response?.uploads.first?.objectKey)
+            await fake.markUploaded(key: key)
+
+            // Segundos inteiros de propósito: o fio ISO8601 do Vapor não carrega fração de
+            // segundo, e o teste compara instantes exatos.
+            let capturedAt = Date(timeIntervalSince1970: 1_700_000_000)
+            let confirmResult = try await Self.postConfirm(
+                app: app, bearer: author.token, recadoID: recado.id,
+                photos: [ConfirmPhotoUploadItem(objectKey: key, capturedAt: capturedAt)]
+            )
+            XCTAssertEqual(confirmResult.status, .created)
+            XCTAssertEqual(confirmResult.dtos?.first?.capturedAt, capturedAt)
+
+            let rows = try await Self.photoTimestampRows(app: app, householdID: household.id, recadoID: recado.id)
+            XCTAssertEqual(rows.count, 1)
+            let stored = try XCTUnwrap(rows.first?.capturedAt)
+            XCTAssertEqual(
+                stored.timeIntervalSince1970, capturedAt.timeIntervalSince1970, accuracy: 0.001,
+                "a coluna captured_at guarda exatamente o instante declarado"
+            )
+
+            // E o DTO do feed devolve o mesmo instante — a ida e volta completa de D-11.
+            let feed = try await Self.getFeed(app: app, bearer: author.token)
+            XCTAssertEqual(feed.status, .ok)
+            let photoRef = try XCTUnwrap(feed.page?.items.first?.photos.first)
+            XCTAssertEqual(photoRef.capturedAt, capturedAt)
+        }
+    }
+
+    func testConfirmWithoutCapturedAtStoresNullAndFallsBackToCreatedAt() async throws {
+        try await TestSupport.withApp { app in
+            let fake = FakeObjectStorageClient()
+            app.objectStorageClient = fake
+            let (household, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "foto sem metadado")
+
+            let presignResult = try await Self.postPresign(
+                app: app, bearer: author.token, recadoID: recado.id,
+                slots: [PhotoUploadSlotRequest(contentType: "image/jpeg", byteSize: 1_000)]
+            )
+            let key = try XCTUnwrap(presignResult.response?.uploads.first?.objectKey)
+            await fake.markUploaded(key: key)
+
+            let confirmResult = try await Self.postConfirm(
+                app: app, bearer: author.token, recadoID: recado.id,
+                photos: [ConfirmPhotoUploadItem(objectKey: key, capturedAt: nil)]
+            )
+            XCTAssertEqual(confirmResult.status, .created)
+
+            let rows = try await Self.photoTimestampRows(app: app, householdID: household.id, recadoID: recado.id)
+            XCTAssertEqual(rows.count, 1)
+            let row = try XCTUnwrap(rows.first)
+            XCTAssertNil(row.capturedAt, "sem metadado grava NULL — a ausência é um estado distinto, preservado")
+
+            // O servidor resolve o fallback para a data de criação da linha; o cliente
+            // nunca vê ausência (Pitfall 6). Tolerância de 1.5s: o fio ISO8601 trunca a
+            // fração de segundo que created_at tem no banco.
+            let dtoCapturedAt = try XCTUnwrap(confirmResult.dtos?.first?.capturedAt)
+            XCTAssertEqual(
+                dtoCapturedAt.timeIntervalSince1970, row.createdAt.timeIntervalSince1970, accuracy: 1.5,
+                "sem metadado, o DTO devolve a data de criação da linha"
+            )
+
+            let feed = try await Self.getFeed(app: app, bearer: author.token)
+            let photoRef = try XCTUnwrap(feed.page?.items.first?.photos.first)
+            XCTAssertEqual(
+                photoRef.capturedAt.timeIntervalSince1970, row.createdAt.timeIntervalSince1970, accuracy: 1.5,
+                "o feed resolve o mesmo fallback, no mesmo ponto único do servidor"
+            )
+        }
+    }
+
+    func testConfirmMixingConfirmedAndNewKeyWritesOneRowWithNewKeysDate() async throws {
+        try await TestSupport.withApp { app in
+            let fake = FakeObjectStorageClient()
+            app.objectStorageClient = fake
+            let (household, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "retry misto")
+
+            let slots = (0..<2).map { _ in PhotoUploadSlotRequest(contentType: "image/jpeg", byteSize: 1_000) }
+            let presignResult = try await Self.postPresign(app: app, bearer: author.token, recadoID: recado.id, slots: slots)
+            let uploads = try XCTUnwrap(presignResult.response?.uploads)
+            let firstKey = uploads[0].objectKey
+            let secondKey = uploads[1].objectKey
+            await fake.markUploaded(key: firstKey)
+            await fake.markUploaded(key: secondKey)
+
+            // Primeira confirmação: só a primeira chave, sem data.
+            let firstConfirm = try await Self.postConfirm(
+                app: app, bearer: author.token, recadoID: recado.id,
+                photos: [ConfirmPhotoUploadItem(objectKey: firstKey, capturedAt: nil)]
+            )
+            XCTAssertEqual(firstConfirm.status, .created)
+
+            // Retry legítimo misturando a chave já confirmada (agora com uma data que NÃO
+            // pode migrar para lugar nenhum) com a chave nova e a data dela — é exatamente o
+            // cenário em que um array paralelo indexado por posição desincronizaria
+            // (Pitfall 3): filtrada a chave antiga, a data da posição 0 escorregaria para a
+            // foto nova.
+            let dateForOldKey = Date(timeIntervalSince1970: 1_600_000_000)
+            let dateForNewKey = Date(timeIntervalSince1970: 1_700_000_000)
+            let secondConfirm = try await Self.postConfirm(
+                app: app, bearer: author.token, recadoID: recado.id,
+                photos: [
+                    ConfirmPhotoUploadItem(objectKey: firstKey, capturedAt: dateForOldKey),
+                    ConfirmPhotoUploadItem(objectKey: secondKey, capturedAt: dateForNewKey),
+                ]
+            )
+            XCTAssertEqual(secondConfirm.status, .created)
+
+            let rows = try await Self.photoTimestampRows(app: app, householdID: household.id, recadoID: recado.id)
+            XCTAssertEqual(rows.count, 2, "uma única linha nova — a chave já confirmada continua ignorada em silêncio")
+
+            let firstRow = try XCTUnwrap(rows.first { $0.objectKey == firstKey })
+            XCTAssertNil(firstRow.capturedAt, "a linha já confirmada não é tocada — a data do retry não desloca nada")
+
+            let secondRow = try XCTUnwrap(rows.first { $0.objectKey == secondKey })
+            let storedNewDate = try XCTUnwrap(secondRow.capturedAt)
+            XCTAssertEqual(
+                storedNewDate.timeIntervalSince1970, dateForNewKey.timeIntervalSince1970, accuracy: 0.001,
+                "a chave nova grava a PRÓPRIA data, nunca a da posição filtrada"
+            )
+        }
+    }
+
+    func testConfirmImplausibleCapturedAtIsStoredAsNull() async throws {
+        try await TestSupport.withApp { app in
+            let fake = FakeObjectStorageClient()
+            app.objectStorageClient = fake
+            let (household, members) = try await TestSupport.makeHouseholdWithMembers(app: app, count: 1)
+            let author = members[0]
+            let recado = try await Self.postRecado(app: app, bearer: author.token, text: "datas absurdas")
+
+            let slots = (0..<2).map { _ in PhotoUploadSlotRequest(contentType: "image/jpeg", byteSize: 1_000) }
+            let presignResult = try await Self.postPresign(app: app, bearer: author.token, recadoID: recado.id, slots: slots)
+            let uploads = try XCTUnwrap(presignResult.response?.uploads)
+            for upload in uploads {
+                await fake.markUploaded(key: upload.objectKey)
+            }
+
+            // Antes de 1970 e mais de 24h no futuro — os dois lados do teto de
+            // plausibilidade (T-02-56). A foto é confirmada normalmente: data implausível
+            // nunca é motivo de recusa, porque o metadado é só de exibição.
+            let beforeEpoch = Date(timeIntervalSince1970: -86_400)
+            let farFuture = Date().addingTimeInterval(48 * 60 * 60)
+            let confirmResult = try await Self.postConfirm(
+                app: app, bearer: author.token, recadoID: recado.id,
+                photos: [
+                    ConfirmPhotoUploadItem(objectKey: uploads[0].objectKey, capturedAt: beforeEpoch),
+                    ConfirmPhotoUploadItem(objectKey: uploads[1].objectKey, capturedAt: farFuture),
+                ]
+            )
+            XCTAssertEqual(confirmResult.status, .created, "data implausível não recusa a confirmação")
+
+            let rows = try await Self.photoTimestampRows(app: app, householdID: household.id, recadoID: recado.id)
+            XCTAssertEqual(rows.count, 2)
+            for row in rows {
+                XCTAssertNil(row.capturedAt, "valor implausível vira NULL em vez de poluir a coluna de timestamp")
+            }
+        }
+    }
+
     func testDownloadURLsOmitsRecadoFromAnotherHousehold() async throws {
         try await TestSupport.withApp { app in
             let fake = FakeObjectStorageClient()
@@ -456,6 +634,29 @@ final class RecadoPhotoTests: XCTestCase {
         return try XCTUnwrap(captured)
     }
 
+    /// Leitura do feed (mesmo molde de `RecadoControllerTests.getFeed`) — usada aqui só para
+    /// provar que `RecadoPhotoRefDTO.capturedAt` devolve o valor resolvido pelo servidor.
+    private static func getFeed(
+        app: Application,
+        bearer: String
+    ) async throws -> (status: HTTPStatus, page: RecadoFeedPage?) {
+        var capturedStatus: HTTPStatus = .internalServerError
+        var capturedPage: RecadoFeedPage?
+        try await app.testable().test(
+            .GET, "/api/v1/recados",
+            beforeRequest: { (req: inout XCTHTTPRequest) async throws in
+                req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
+            },
+            afterResponse: { (res: XCTHTTPResponse) async throws in
+                capturedStatus = res.status
+                if res.status == .ok {
+                    capturedPage = try res.content.decode(RecadoFeedPage.self)
+                }
+            }
+        )
+        return (capturedStatus, capturedPage)
+    }
+
     private static func postPresign(
         app: Application,
         bearer: String,
@@ -483,11 +684,13 @@ final class RecadoPhotoTests: XCTestCase {
         return (capturedStatus, capturedResponse, capturedError)
     }
 
+    /// Forma canônica do confirm depois do plano 02-08 — um item por foto, cada um com a
+    /// própria data de captura (D-11, Pitfall 3 do 02-ADDENDUM-RESEARCH.md).
     private static func postConfirm(
         app: Application,
         bearer: String,
         recadoID: UUID,
-        objectKeys: [String]
+        photos: [ConfirmPhotoUploadItem]
     ) async throws -> (status: HTTPStatus, dtos: [ConfirmedPhotoDTO]?, error: APIErrorResponse?) {
         var capturedStatus: HTTPStatus = .internalServerError
         var capturedDTOs: [ConfirmedPhotoDTO]?
@@ -496,7 +699,7 @@ final class RecadoPhotoTests: XCTestCase {
             .POST, "/api/v1/recados/\(recadoID.uuidString)/photos/confirm",
             beforeRequest: { (req: inout XCTHTTPRequest) async throws in
                 req.headers.bearerAuthorization = BearerAuthorization(token: bearer)
-                try req.content.encode(ConfirmPhotoUploadRequest(objectKeys: objectKeys), as: .json)
+                try req.content.encode(ConfirmPhotoUploadRequest(photos: photos), as: .json)
             },
             afterResponse: { (res: XCTHTTPResponse) async throws in
                 capturedStatus = res.status
@@ -508,6 +711,22 @@ final class RecadoPhotoTests: XCTestCase {
             }
         )
         return (capturedStatus, capturedDTOs, capturedError)
+    }
+
+    /// Conveniência para os testes anteriores ao plano 02-08 — chaves sem data de captura.
+    /// Só muda a forma da chamada; toda asserção existente fica igual.
+    private static func postConfirm(
+        app: Application,
+        bearer: String,
+        recadoID: UUID,
+        objectKeys: [String]
+    ) async throws -> (status: HTTPStatus, dtos: [ConfirmedPhotoDTO]?, error: APIErrorResponse?) {
+        try await Self.postConfirm(
+            app: app,
+            bearer: bearer,
+            recadoID: recadoID,
+            photos: objectKeys.map { ConfirmPhotoUploadItem(objectKey: $0, capturedAt: nil) }
+        )
     }
 
     private static func postDownloadURLs(
@@ -602,6 +821,31 @@ final class RecadoPhotoTests: XCTestCase {
                     position: try $0.decode(column: "position", as: Int.self),
                     contentType: try $0.decode(column: "content_type", as: String.self),
                     byteSize: try $0.decode(column: "byte_size", as: Int64.self)
+                )
+            }
+        }
+    }
+
+    /// Leitura direta de `captured_at`/`created_at` de `recado_photos` — mesmo padrão de
+    /// `photoRows`, usada pelos testes de D-11 para provar o que a coluna realmente guarda
+    /// (NULL preservado vs. valor exato), o que a resposta HTTP sozinha não distingue.
+    private static func photoTimestampRows(
+        app: Application,
+        householdID: UUID,
+        recadoID: UUID
+    ) async throws -> [(objectKey: String, capturedAt: Date?, createdAt: Date)] {
+        try await TestSupport.withAppRoleConnection(app: app, householdID: householdID) { sql in
+            let rows = try await sql.raw(
+                """
+                SELECT object_key, captured_at, created_at FROM recado_photos
+                WHERE recado_id = \(bind: recadoID.uuidString)::uuid ORDER BY position
+                """
+            ).all()
+            return try rows.map {
+                (
+                    objectKey: try $0.decode(column: "object_key", as: String.self),
+                    capturedAt: try $0.decode(column: "captured_at", as: Date?.self),
+                    createdAt: try $0.decode(column: "created_at", as: Date.self)
                 )
             }
         }
