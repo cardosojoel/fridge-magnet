@@ -22,10 +22,15 @@ final class ComposeRecadoViewModel {
     struct StagedPhotoInput: Sendable {
         let data: Data
         let contentType: String
+        /// Data de captura lida do metadado dos próprios bytes (`PhotoMetadataReader`, D-11,
+        /// plano 02-09) — nula quando o arquivo não tinha metadado de data (captura de tela,
+        /// PNG limpo).
+        let capturedAt: Date?
 
-        init(data: Data, contentType: String) {
+        init(data: Data, contentType: String, capturedAt: Date? = nil) {
             self.data = data
             self.contentType = contentType
+            self.capturedAt = capturedAt
         }
     }
 
@@ -42,12 +47,20 @@ final class ComposeRecadoViewModel {
         let id: UUID
         let data: Data
         let contentType: String
+        /// Data de captura do arquivo desta foto (D-11) — viaja no item de confirm **desta**
+        /// foto, nunca num índice paralelo; valor padrão nulo para não quebrar construção
+        /// existente.
+        let capturedAt: Date?
         var uploadState: UploadState
 
-        init(id: UUID = UUID(), data: Data, contentType: String, uploadState: UploadState = .pending) {
+        init(
+            id: UUID = UUID(), data: Data, contentType: String, capturedAt: Date? = nil,
+            uploadState: UploadState = .pending
+        ) {
             self.id = id
             self.data = data
             self.contentType = contentType
+            self.capturedAt = capturedAt
             self.uploadState = uploadState
         }
     }
@@ -131,7 +144,7 @@ final class ComposeRecadoViewModel {
         guard remainingSlots > 0 else { return }
         let accepted = inputs.prefix(remainingSlots)
         stagedPhotos.append(contentsOf: accepted.map {
-            StagedPhoto(data: $0.data, contentType: $0.contentType)
+            StagedPhoto(data: $0.data, contentType: $0.contentType, capturedAt: $0.capturedAt)
         })
     }
 
@@ -202,11 +215,11 @@ final class ComposeRecadoViewModel {
             setUploadState(photoID: photo.id, to: .uploading)
             try await photoUploadService.upload(data: photo.data, to: upload.uploadURL, contentType: photo.contentType)
             setUploadState(photoID: photo.id, to: .uploaded(objectKey: upload.objectKey))
-            // capturedAt ausente por enquanto — o plano 02-09 lê o metadado EXIF do arquivo
-            // e preenche o valor real neste ponto.
+            // A data de captura é a da ÚNICA foto envolvida na retentativa — lida da própria
+            // `StagedPhoto`, nunca de outra da mesma sessão de compose (D-11).
             _ = try await apiClient.confirmPhotoUploads(
                 recadoID: recadoID,
-                photos: [ConfirmPhotoUploadItem(objectKey: upload.objectKey, capturedAt: nil)]
+                photos: [ConfirmPhotoUploadItem(objectKey: upload.objectKey, capturedAt: photo.capturedAt)]
             )
             if !stagedPhotos.contains(where: { $0.uploadState == .failed }) {
                 errorMessage = nil
@@ -235,20 +248,24 @@ final class ComposeRecadoViewModel {
             return
         }
 
-        var uploadedKeys: [String] = []
+        // Cada par (chave, data de captura) é acumulado no MESMO laço que envia a foto — a
+        // data vem da própria `StagedPhoto` daquela iteração, nunca de um índice paralelo
+        // remontado depois (D-11; um array paralelo desincronizaria no primeiro retry que
+        // mistura chave já confirmada com chave nova).
+        var uploadedItems: [(objectKey: String, capturedAt: Date?)] = []
         for (photo, upload) in zip(pending, presigned.uploads) {
             setUploadState(photoID: photo.id, to: .uploading)
             do {
                 try await photoUploadService.upload(data: photo.data, to: upload.uploadURL, contentType: photo.contentType)
                 setUploadState(photoID: photo.id, to: .uploaded(objectKey: upload.objectKey))
-                uploadedKeys.append(upload.objectKey)
+                uploadedItems.append((objectKey: upload.objectKey, capturedAt: photo.capturedAt))
             } catch {
                 setUploadState(photoID: photo.id, to: .failed)
             }
         }
 
-        let anyUploadFailed = uploadedKeys.count != pending.count
-        guard !uploadedKeys.isEmpty else {
+        let anyUploadFailed = uploadedItems.count != pending.count
+        guard !uploadedItems.isEmpty else {
             if anyUploadFailed {
                 errorMessage = JKCopy.muralComposePhotoUploadPartialFailure
             }
@@ -256,9 +273,7 @@ final class ComposeRecadoViewModel {
         }
 
         do {
-            // capturedAt ausente por enquanto — o plano 02-09 lê o metadado EXIF do arquivo
-            // e preenche o valor real neste ponto.
-            let items = uploadedKeys.map { ConfirmPhotoUploadItem(objectKey: $0, capturedAt: nil) }
+            let items = uploadedItems.map { ConfirmPhotoUploadItem(objectKey: $0.objectKey, capturedAt: $0.capturedAt) }
             _ = try await apiClient.confirmPhotoUploads(recadoID: recadoID, photos: items)
             if anyUploadFailed {
                 errorMessage = JKCopy.muralComposePhotoUploadPartialFailure
@@ -266,7 +281,7 @@ final class ComposeRecadoViewModel {
         } catch {
             // Confirm recusado (ex.: .photoNotUploaded, T-02-45) — as chaves desta chamada
             // voltam para `failed`, a falha nunca é silenciosa.
-            markFailed(keys: uploadedKeys)
+            markFailed(keys: uploadedItems.map(\.objectKey))
             errorMessage = JKCopy.muralComposePhotoUploadPartialFailure
         }
     }

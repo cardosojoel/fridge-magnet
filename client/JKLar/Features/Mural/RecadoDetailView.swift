@@ -78,6 +78,14 @@ struct RecadoDetailView: View {
         }
     }
 
+    /// Data de captura por id de foto (D-11) — mesma derivação trivial de `RecadoCard`
+    /// (duplicada só a linha do mapa, nunca a regra de exibição, que mora no componente do
+    /// design system): `photoURLs` não carrega metadado, `recado.photos` carrega, e as duas
+    /// listas compartilham o id.
+    private var capturedAtByPhotoID: [UUID: Date] {
+        Dictionary(uniqueKeysWithValues: viewModel.recado.photos.map { ($0.id, $0.capturedAt) })
+    }
+
     /// Mesmo tratamento de `RecadoCard.photoCarousel` (raio único, `aspectRatio(1)`), sem o
     /// padding negativo de borda a borda do cartão do feed — a folha já tem sua própria margem
     /// lateral.
@@ -96,6 +104,14 @@ struct RecadoDetailView: View {
                 }
             }
             .clipped()
+            // Inferior esquerdo com recuo de JKSpacing.sm — centro inferior é dos pontos de
+            // página; o componente decide sozinho se aparece (D-11).
+            .overlay(alignment: .bottomLeading) {
+                if let capturedAt = capturedAtByPhotoID[photo.id] {
+                    JKPhotoDateBadge(capturedAt: capturedAt, postedAt: viewModel.recado.createdAt)
+                        .padding(JKSpacing.sm)
+                }
+            }
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(JKLayout.cardShape)

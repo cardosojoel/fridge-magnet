@@ -408,4 +408,22 @@ enum JKCopy {
     /// String exata do Copywriting Contract — Addendum 2 (linha "Arquivados — unarchive
     /// CTA").
     static let muralArchivedUnarchiveCTA = "Desarquivar"
+
+    /// String do Copywriting Contract — Addendum D-11 (linha "Photo — captured-date
+    /// caption"): "Tirada em {data}", data pt-BR em formato longo de dia e mês (ex.:
+    /// "Tirada em 12 de março"). Renderizada só pelo componente de legenda do design
+    /// system, nunca montada em view.
+    static func muralPhotoCapturedAtCaption(_ date: Date) -> String {
+        "Tirada em \(capturedAtCaptionDateFormatter.string(from: date))"
+    }
+
+    /// Formato `d 'de' MMMM` fixado pela mesma linha do contrato; locale pt-BR explícito
+    /// para o nome do mês nunca variar com o idioma do aparelho — a cópia deste app é
+    /// pt-BR por contrato, não por acaso do ambiente.
+    private static let capturedAtCaptionDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "pt_BR")
+        formatter.dateFormat = "d 'de' MMMM"
+        return formatter
+    }()
 }

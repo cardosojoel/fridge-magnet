@@ -391,6 +391,40 @@ extension View {
     }
 }
 
+/// Legenda de data de captura sobre uma foto de carrossel (D-11, plano 02-09) — cápsula de
+/// `.ultraThinMaterial` com texto branco no papel de rótulo, renderizada **somente** quando o
+/// dia de calendário da captura difere do dia do post (o caso da foto de exame tirada em
+/// outro dia); no caso comum — mesmo dia, ou foto sem metadado — a view não desenha nada, e
+/// quem usa pode posicionar a legenda incondicionalmente. Branco puro por contrato
+/// (02-UI-SPEC.md § Color: sem accent nesta legenda); nenhum token de cor do tema entra.
+///
+/// Ancoragem: quem usa põe a `JKPhotoDateBadge` em `alignment: .bottomLeading` com recuo de
+/// `JKSpacing.sm` dos dois lados — o centro inferior é território do indicador de página do
+/// `JKPhotoCarousel`, e sobrepor as duas ancoragens num carrossel de 2+ fotos é o erro
+/// esperado aqui.
+struct JKPhotoDateBadge: View {
+    let capturedAt: Date
+    let postedAt: Date
+
+    /// A **única** materialização da regra de D-11 em todo o cliente — os três carrosséis
+    /// (compose, cartão do feed, detalhe) chamam este ponto; nenhuma view reimplementa a
+    /// comparação de dia. `Calendar.current`: o dia relevante é o do fuso do aparelho.
+    static func shouldDisplay(capturedAt: Date, postedAt: Date) -> Bool {
+        !Calendar.current.isDate(capturedAt, inSameDayAs: postedAt)
+    }
+
+    var body: some View {
+        if Self.shouldDisplay(capturedAt: capturedAt, postedAt: postedAt) {
+            Text(JKCopy.muralPhotoCapturedAtCaption(capturedAt))
+                .font(JKTypography.label)
+                .foregroundStyle(.white)
+                .padding(.horizontal, JKSpacing.sm)
+                .padding(.vertical, JKSpacing.xs)
+                .background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+}
+
 /// Selo de recado fixado (D-14, plano 02-12) — pílula compacta `pin.fill` + "Fixado", no
 /// mesmo molde de `JKRoleBadge`: cápsula sobre `JKColor.jkCardSurfaceBase`, papel
 /// tipográfico de rótulo. Foreground **neutro** de propósito: a lista de usos reservados de

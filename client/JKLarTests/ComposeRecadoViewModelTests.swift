@@ -126,12 +126,17 @@ private struct ComposeStubTransport: APIClientTransport {
 /// demais devolvem 200. O `objectKey` é lido do path da URL assinada (formato de teste
 /// `.../\(prefix)-\(index)`, ver `ComposeStubTransport.encodePresign`).
 private actor PhotoUploadOutcomeTransport: PhotoUploadTransport {
-    private let failingObjectKeys: Set<String>
+    private var failingObjectKeys: Set<String>
+    /// Quando verdadeiro, cada chave falhante falha só na primeira tentativa — a retentativa
+    /// da mesma chave sucede (plano 02-09: o teste de retentativa precisa que o confirm da
+    /// retentativa aconteça de verdade para inspecionar o corpo dele).
+    private let failOnlyOnce: Bool
     private(set) var callCount = 0
     private(set) var uploadedURLs: [URL] = []
 
-    init(failingObjectKeys: Set<String> = []) {
+    init(failingObjectKeys: Set<String> = [], failOnlyOnce: Bool = false) {
         self.failingObjectKeys = failingObjectKeys
+        self.failOnlyOnce = failOnlyOnce
     }
 
     func upload(_ request: URLRequest, from data: Data) async throws -> HTTPURLResponse {
@@ -139,8 +144,11 @@ private actor PhotoUploadOutcomeTransport: PhotoUploadTransport {
         let url = request.url!
         uploadedURLs.append(url)
         let objectKey = url.lastPathComponent
-        let statusCode = failingObjectKeys.contains(objectKey) ? 500 : 200
-        return HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
+        let shouldFail = failingObjectKeys.contains(objectKey)
+        if shouldFail, failOnlyOnce {
+            failingObjectKeys.remove(objectKey)
+        }
+        return HTTPURLResponse(url: url, statusCode: shouldFail ? 500 : 200, httpVersion: nil, headerFields: nil)!
     }
 }
 
@@ -350,8 +358,25 @@ final class ComposeRecadoViewModelTests: XCTestCase {
 
     // MARK: addPhotos(_:) / teto de 10 (plano 02-06 Task 1)
 
-    private func makeInput(contentType: String = "image/jpeg") -> ComposeRecadoViewModel.StagedPhotoInput {
-        .init(data: Data("foto".utf8), contentType: contentType)
+    private func makeInput(
+        contentType: String = "image/jpeg", capturedAt: Date? = nil
+    ) -> ComposeRecadoViewModel.StagedPhotoInput {
+        .init(data: Data("foto".utf8), contentType: contentType, capturedAt: capturedAt)
+    }
+
+    /// Decodifica o corpo do último request registrado como o corpo de confirm — com datas
+    /// ISO8601, espelhando o `ComposeStubTransport.encodeConfirm` (o `APIClient` codifica
+    /// `capturedAt` como ISO8601; um `JSONDecoder()` cru falharia na primeira data real).
+    private func decodeConfirmBody(_ body: Data?) throws -> ConfirmPhotoUploadRequest {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(ConfirmPhotoUploadRequest.self, from: body ?? Data())
+    }
+
+    /// Data com precisão de segundo inteiro — ISO8601 de fio não carrega fração de segundo,
+    /// então o round-trip codifica/decodifica só é exato em datas já truncadas.
+    private func wholeSecondDate(_ interval: TimeInterval) -> Date {
+        Date(timeIntervalSince1970: interval.rounded(.down))
     }
 
     func testAddPhotosLeavesThreeItemsAllPendingWithCounter() {
@@ -574,6 +599,88 @@ final class ComposeRecadoViewModelTests: XCTestCase {
 
         XCTAssertEqual(sut.stagedPhotos.first?.uploadState, .failed, "chave recusada no confirm volta pro estado failed")
         XCTAssertEqual(sut.errorMessage, JKCopy.muralComposePhotoUploadPartialFailure)
+    }
+
+    // MARK: capturedAt — anexar, confirm e retentativa (plano 02-09, D-11)
+
+    func testAddPhotosPropagatesCapturedAtToStagedPhoto() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        let captured = wholeSecondDate(1_770_000_000)
+
+        sut.addPhotos([makeInput(capturedAt: captured)])
+
+        XCTAssertEqual(sut.stagedPhotos.first?.capturedAt, captured, "a data de captura do input fica na foto anexada")
+    }
+
+    func testAddPhotosWithoutCapturedAtLeavesStagedPhotoCapturedAtNil() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+
+        sut.addPhotos([makeInput()])
+
+        XCTAssertNil(sut.stagedPhotos.first?.capturedAt, "foto sem metadado de data fica com capturedAt nulo")
+    }
+
+    func testSubmitWithPhotosSendsPerItemCapturedAtInConfirmBody() async throws {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Com datas")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        let uploadTransport = PhotoUploadOutcomeTransport()
+        let sut = ComposeRecadoViewModel(
+            mode: .new,
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            photoUploadService: PhotoUploadService(transport: uploadTransport)
+        )
+        sut.text = "Com datas"
+        let captured = wholeSecondDate(1_770_000_000)
+        // Uma foto com data de captura e uma sem — o corpo do confirm tem de carregar a data
+        // POR ITEM (nula quando não havia metadado), nunca uma data única para o lote.
+        sut.addPhotos([makeInput(capturedAt: captured), makeInput()])
+
+        await sut.submit { _ in }
+
+        // O confirm é a última chamada da sequência create → presign → confirm, então o
+        // corpo mais recente registrado é o dele.
+        let body = try await decodeConfirmBody(recorder.lastBody)
+        XCTAssertEqual(body.photos.count, 2, "um item por chave enviada")
+        XCTAssertEqual(body.photos[0].capturedAt, captured, "a data de captura da primeira foto viaja no item dela")
+        XCTAssertNil(body.photos[1].capturedAt, "foto sem metadado manda nulo — o servidor resolve o fallback")
+    }
+
+    func testRetryUploadSendsThatPhotosOwnCapturedAtNotAnotherPhotos() async throws {
+        let recorder = CallRecorder()
+        let created = makeRecado(text: "Retry com data")
+        let transport = ComposeStubTransport(outcome: .success(created, status: 201), recorder: recorder)
+        // A primeira foto ("key-0") falha no submit; a segunda sobe normalmente. `failOnlyOnce`
+        // deixa a retentativa da mesma chave suceder — sem isso o confirm da retentativa nunca
+        // aconteceria e o corpo dele não existiria para inspecionar.
+        let uploadTransport = PhotoUploadOutcomeTransport(failingObjectKeys: ["key-0"], failOnlyOnce: true)
+        let sut = ComposeRecadoViewModel(
+            mode: .new,
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            photoUploadService: PhotoUploadService(transport: uploadTransport)
+        )
+        sut.text = "Retry com data"
+        let capturedOfFailedPhoto = wholeSecondDate(1_770_000_000)
+        let capturedOfOtherPhoto = wholeSecondDate(1_770_100_000)
+        sut.addPhotos([
+            makeInput(capturedAt: capturedOfFailedPhoto),
+            makeInput(capturedAt: capturedOfOtherPhoto),
+        ])
+        await sut.submit { _ in }
+        guard let failedPhoto = sut.stagedPhotos.first, failedPhoto.uploadState == .failed else {
+            return XCTFail("pré-condição: esperava a primeira foto em failed antes da retentativa")
+        }
+
+        await sut.retryUpload(photoID: failedPhoto.id)
+
+        // O confirm da retentativa é a chamada mais recente — o item único carrega a data
+        // DAQUELA foto, nunca a da outra da mesma sessão de compose.
+        let body = try await decodeConfirmBody(recorder.lastBody)
+        XCTAssertEqual(body.photos.count, 1, "retentativa isolada confirma só a foto envolvida")
+        XCTAssertEqual(body.photos[0].capturedAt, capturedOfFailedPhoto)
+        XCTAssertNotEqual(body.photos[0].capturedAt, capturedOfOtherPhoto, "nunca a data de outra foto da sessão")
     }
 
     // MARK: setMentions(_:) (plano 02-06 Task 2)
