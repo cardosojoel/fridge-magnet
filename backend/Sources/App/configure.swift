@@ -110,6 +110,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(CreateRecadoSchema(), to: .owner)
     app.migrations.add(AddRecadoPinAndArchive(), to: .owner)
     app.migrations.add(AddPhotoCapturedAtAndRecadoLocation(), to: .owner)
+    app.migrations.add(AddRecadoEventReminder(), to: .owner)
     try await app.autoMigrate().get()
 
     // MARK: Assinatura JWT — ES256, chave carregada do ambiente.

@@ -67,6 +67,33 @@ public struct RecadoLocationDTO: Codable, Sendable {
     }
 }
 
+/// Conjunto fechado de antecedências de lembrete de um recado (D-16, plano 02-14) — o
+/// ponto ÚNICO do projeto onde o conjunto existe: o servidor valida contra ele
+/// (`RecadoController.normalizeReminder`, via inicialização por raw value) e o cliente
+/// monta o picker a partir de `allCases`, na ordem de declaração (02-UI-SPEC.md Addendum
+/// 3: na hora, 5 min, 15 min, 30 min, 1 h, 1 dia). Duas listas de seis valores
+/// divergiriam na primeira vez que alguém acrescentasse a sétima — mesmo espírito de
+/// `ReactionKind`.
+///
+/// O raw value é a antecedência em SEGUNDOS antes do instante do evento — é o que viaja
+/// no contrato (`eventAt` + `remindOffsetSeconds`) e o que a coluna
+/// `recados.remind_offset_seconds` guarda.
+public enum ReminderOffset: Int, Codable, Sendable, CaseIterable {
+    case atTime = 0
+    case fiveMinutes = 300
+    case fifteenMinutes = 900
+    case thirtyMinutes = 1800
+    case oneHour = 3600
+    case oneDay = 86400
+
+    /// Pertinência ao conjunto fechado — implementada pela própria inicialização por raw
+    /// value, NUNCA por uma segunda lista escrita à mão (que divergiria da declaração
+    /// acima em silêncio).
+    public static func contains(_ seconds: Int) -> Bool {
+        ReminderOffset(rawValue: seconds) != nil
+    }
+}
+
 /// Uma @menção resolvida para exibição — sempre um `userID` real (D-06: seletor
 /// estruturado, nunca texto livre), nunca um nome cru sem id por trás.
 public struct MentionDTO: Codable, Sendable {
@@ -171,11 +198,21 @@ public struct RecadoDTO: Codable, Sendable {
     /// só devolve o objeto quando as três colunas estão preenchidas, nunca um objeto vazio
     /// ou com coordenada zero.
     public var location: RecadoLocationDTO?
+    /// Instante do EVENTO do lembrete opcional (D-16, plano 02-14) — nulo é "sem
+    /// lembrete". Anda junto de `remindOffsetSeconds` POR CONSTRUÇÃO: o servidor nunca
+    /// emite um sem o outro (`buildDTO` só monta o par quando as duas colunas estão
+    /// preenchidas; combinação parcial no banco vira ausência nas duas pontas) — o
+    /// cliente nunca precisa defender um lembrete meio montado.
+    public var eventAt: Date?
+    /// Antecedência do lembrete em segundos antes de `eventAt` (D-16) — nulo é "sem
+    /// lembrete"; ver `eventAt` para o par indivisível. Sempre um valor do conjunto
+    /// fechado `ReminderOffset`, nunca negativa (validado no servidor na escrita).
+    public var remindOffsetSeconds: Int?
 
-    // Os cinco parâmetros novos entram com valor padrão de propósito: `RecadoDTO` é
-    // construído em dezenas de pontos de teste (backend e cliente, ondas 1 a 4) e um
+    // Os parâmetros aditivos entram com valor padrão de propósito: `RecadoDTO` é
+    // construído em dezenas de pontos de teste (backend e cliente, ondas 1 a 10) e um
     // parâmetro obrigatório novo quebraria a compilação de todos eles — mesmo precedente
-    // dos campos aditivos anteriores. O servidor sempre passa os cinco explicitamente; o
+    // dos campos aditivos anteriores. O servidor sempre passa todos explicitamente; o
     // padrão existe só para os pontos de construção antigos.
     public init(
         id: UUID,
@@ -197,7 +234,9 @@ public struct RecadoDTO: Codable, Sendable {
         canPin: Bool = false,
         canArchive: Bool = false,
         canUnarchive: Bool = false,
-        location: RecadoLocationDTO? = nil
+        location: RecadoLocationDTO? = nil,
+        eventAt: Date? = nil,
+        remindOffsetSeconds: Int? = nil
     ) {
         self.id = id
         self.authorID = authorID
@@ -219,6 +258,8 @@ public struct RecadoDTO: Codable, Sendable {
         self.canArchive = canArchive
         self.canUnarchive = canUnarchive
         self.location = location
+        self.eventAt = eventAt
+        self.remindOffsetSeconds = remindOffsetSeconds
     }
 }
 
@@ -283,17 +324,38 @@ public struct CreateRecadoRequest: Codable, Sendable {
     /// carregam o campo: um corpo real que não passasse pelo `init(from:)` atualizado
     /// decodificaria a localização como nula silenciosamente.
     public var location: RecadoLocationDTO?
+    /// Instante do evento do lembrete opcional (D-16, plano 02-14) — mesmo contrato de
+    /// três lugares de `location`. Na CRIAÇÃO não existe o caso "não veio versus veio
+    /// nulo": não há estado anterior a preservar, então chave ausente e chave nula
+    /// significam a mesma coisa — sem lembrete. A distinção é o ponto inteiro da EDIÇÃO:
+    /// ver `UpdateRecadoRequest.reminder`. O par é indivisível — só um dos dois
+    /// preenchidos é recusado pelo servidor com 400, nunca persistido pela metade.
+    public var eventAt: Date?
+    /// Antecedência do lembrete em segundos (D-16) — ver `eventAt` para a assimetria
+    /// criação/edição e o par indivisível. Sempre um valor do conjunto fechado
+    /// `ReminderOffset` (validado no servidor).
+    public var remindOffsetSeconds: Int?
 
-    public init(text: String?, mentionedUserIDs: [UUID] = [], location: RecadoLocationDTO? = nil) {
+    public init(
+        text: String?,
+        mentionedUserIDs: [UUID] = [],
+        location: RecadoLocationDTO? = nil,
+        eventAt: Date? = nil,
+        remindOffsetSeconds: Int? = nil
+    ) {
         self.text = text
         self.mentionedUserIDs = mentionedUserIDs
         self.location = location
+        self.eventAt = eventAt
+        self.remindOffsetSeconds = remindOffsetSeconds
     }
 
     private enum CodingKeys: String, CodingKey {
         case text
         case mentionedUserIDs
         case location
+        case eventAt
+        case remindOffsetSeconds
     }
 
     // Init manual (não synthesized): `mentionedUserIDs` precisa decodificar como `[]` quando
@@ -305,6 +367,8 @@ public struct CreateRecadoRequest: Codable, Sendable {
         self.text = try container.decodeIfPresent(String.self, forKey: .text)
         self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
         self.location = try container.decodeIfPresent(RecadoLocationDTO.self, forKey: .location)
+        self.eventAt = try container.decodeIfPresent(Date.self, forKey: .eventAt)
+        self.remindOffsetSeconds = try container.decodeIfPresent(Int.self, forKey: .remindOffsetSeconds)
     }
 }
 
