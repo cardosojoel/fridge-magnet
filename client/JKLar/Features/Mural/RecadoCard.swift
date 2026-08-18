@@ -83,6 +83,8 @@ struct RecadoCard: View {
                     JKMentionChipRow(mentions: recado.mentions)
                 }
 
+                locationSection
+
                 reactionSection
                     .padding(.top, JKSpacing.md)
 
@@ -119,6 +121,30 @@ struct RecadoCard: View {
             Button(JKCopy.cancelButtonLabel, role: .cancel) {}
         } message: {
             Text(JKCopy.muralRecadoArchiveConfirmMessage)
+        }
+    }
+
+    /// Localização do recado publicado (D-12, plano 02-10) — exatamente dois elementos,
+    /// nesta ordem: linha de pino em círculo + texto guardado (ambos em `.secondary`, cor
+    /// neutra e nunca destaque — numa publicação a localização já não é uma seleção ativa,
+    /// §Color do 02-UI-SPEC.md), e o trecho de mapa logo abaixo. O texto guardado é a
+    /// própria cópia, sem invólucro, quebrando em até duas linhas antes de truncar. Sem
+    /// localização, nada é desenhado — ausência é silêncio, como já é para foto e menção.
+    /// Nenhum caminho de toque para o app de mapas: contexto decorativo por decisão.
+    @ViewBuilder
+    private var locationSection: some View {
+        if let location = recado.location {
+            VStack(alignment: .leading, spacing: JKSpacing.xs) {
+                HStack(alignment: .firstTextBaseline, spacing: JKSpacing.xs) {
+                    Image(systemName: "mappin.circle.fill")
+                    Text(location.text)
+                        .lineLimit(2)
+                }
+                .font(JKTypography.label)
+                .foregroundStyle(.secondary)
+
+                JKLocationPreview(lat: location.lat, lng: location.lng)
+            }
         }
     }
 

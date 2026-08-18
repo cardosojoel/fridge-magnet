@@ -29,6 +29,7 @@ struct ComposeRecadoView: View {
     @State private var viewModel: ComposeRecadoViewModel
     @State private var photoPickerSelection: [PhotosPickerItem] = []
     @State private var isMentionPickerPresented = false
+    @State private var isLocationSearchPresented = false
     @Environment(\.dismiss) private var dismiss
 
     /// Chamado com o `RecadoDTO` criado/atualizado depois de um `submit()` bem-sucedido —
@@ -43,9 +44,12 @@ struct ComposeRecadoView: View {
     init(
         mode: ComposeRecadoViewModel.Mode,
         initialText: String = "",
+        initialLocation: RecadoLocationDTO? = nil,
         onSuccess: @escaping (RecadoDTO) -> Void
     ) {
-        _viewModel = State(initialValue: ComposeRecadoViewModel(mode: mode, initialText: initialText))
+        _viewModel = State(initialValue: ComposeRecadoViewModel(
+            mode: mode, initialText: initialText, initialLocation: initialLocation
+        ))
         self.onSuccess = onSuccess
     }
 
@@ -96,6 +100,14 @@ struct ComposeRecadoView: View {
             // dele (02-UI-SPEC.md § Addendum 2, Supersessão item 1).
             MentionPickerView(initiallySelected: viewModel.selectedMentions.map(\.userID)) { mentions in
                 viewModel.setMentions(mentions)
+            }
+        }
+        .sheet(isPresented: $isLocationSearchPresented) {
+            // Folha de busca de localização (D-12, plano 02-10) — aninhada do mesmo jeito
+            // que a folha de menção acima; o retorno é o lugar resolvido (nome editável +
+            // coordenada instantânea da escolha).
+            LocationSearchView { resolved in
+                viewModel.setLocation(name: resolved.name, lat: resolved.lat, lng: resolved.lng)
             }
         }
     }
@@ -372,11 +384,33 @@ struct ComposeRecadoView: View {
         VStack(alignment: .leading, spacing: JKSpacing.md) {
             mentionSection
 
-            // POSIÇÃO RESERVADA (plano 02-10): a linha "Adicionar localização" do adendo 1
-            // (D-12) encaixa IMEDIATAMENTE abaixo da linha de marcar alguém, aqui — o
-            // executor do plano 02-10 insere a linha dele neste ponto, sem inventar outra
-            // posição (02-UI-SPEC.md § Addendum 2, D-13 corpo item 3, "Reserved extension
-            // point"). D-13 só reserva a posição; nenhum código de localização entra aqui.
+            // Linha de localização (D-12, plano 02-10) — imediatamente abaixo da linha de
+            // marcar alguém, na posição que o plano 02-13 reservou (02-UI-SPEC.md §
+            // Addendum 2, D-13 corpo item 3, "Reserved extension point").
+            locationSection
+        }
+    }
+
+    // MARK: - Localização (plano 02-10, D-12)
+
+    /// Dois estados (02-UI-SPEC.md § Addendum, D-12 item 1): sem localização, só o botão de
+    /// adicionar (mesmo formato de `Label` do gatilho de menção — nenhuma linha de campo);
+    /// com localização, o campo do design system com pino de destaque, rótulo editável e
+    /// limpar neutro, ligado às mutações do view-model.
+    @ViewBuilder
+    private var locationSection: some View {
+        if let location = viewModel.selectedLocation {
+            JKLocationField(
+                text: location.text,
+                onTextChange: { viewModel.updateLocationText($0) },
+                onClear: { viewModel.clearLocation() }
+            )
+        } else {
+            Button {
+                isLocationSearchPresented = true
+            } label: {
+                Label(JKCopy.muralComposeAddLocationCTA, systemImage: "mappin.and.ellipse")
+            }
         }
     }
 

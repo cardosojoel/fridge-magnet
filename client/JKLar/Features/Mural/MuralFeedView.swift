@@ -89,7 +89,14 @@ struct MuralFeedView: View {
     @ViewBuilder
     private var composeSheet: some View {
         if let editingRecado {
-            ComposeRecadoView(mode: .editing(recadoID: editingRecado.id), initialText: editingRecado.text ?? "") { _ in
+            // `initialLocation` acompanha o `initialText` (plano 02-10): a rota de PATCH tem
+            // semântica de substituição para a localização — sem o pré-preenchimento, salvar
+            // uma edição apagaria a localização existente em silêncio.
+            ComposeRecadoView(
+                mode: .editing(recadoID: editingRecado.id),
+                initialText: editingRecado.text ?? "",
+                initialLocation: editingRecado.location
+            ) { _ in
                 Task { await viewModel.reloadFromTop() }
             }
         } else {

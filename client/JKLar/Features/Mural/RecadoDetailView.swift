@@ -43,6 +43,8 @@ struct RecadoDetailView: View {
                         JKMentionChipRow(mentions: viewModel.recado.mentions)
                     }
 
+                    locationSection
+
                     reactionSection
 
                     Divider()
@@ -115,6 +117,27 @@ struct RecadoDetailView: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(JKLayout.cardShape)
+    }
+
+    /// Mesma composição de dois elementos do cartão do feed (D-12, plano 02-10), na mesma
+    /// posição relativa — depois do carrossel e do texto, antes da barra de reação. A
+    /// duplicação aceita é só esta composição de duas linhas: a decisão de cor neutra e a
+    /// altura fixa moram no componente do design system e no token, nunca aqui.
+    @ViewBuilder
+    private var locationSection: some View {
+        if let location = viewModel.recado.location {
+            VStack(alignment: .leading, spacing: JKSpacing.xs) {
+                HStack(alignment: .firstTextBaseline, spacing: JKSpacing.xs) {
+                    Image(systemName: "mappin.circle.fill")
+                    Text(location.text)
+                        .lineLimit(2)
+                }
+                .font(JKTypography.label)
+                .foregroundStyle(.secondary)
+
+                JKLocationPreview(lat: location.lat, lng: location.lng)
+            }
+        }
     }
 
     private var reactionSection: some View {

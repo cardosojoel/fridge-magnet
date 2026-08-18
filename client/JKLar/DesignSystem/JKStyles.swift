@@ -1,4 +1,5 @@
 import JKLarShared
+import MapKit
 import SwiftUI
 
 /// Fundo de tela translúcido — `.ultraThinMaterial` sobre `jkScreenBackgroundBase`
@@ -421,6 +422,83 @@ struct JKPhotoDateBadge: View {
                 .padding(.horizontal, JKSpacing.sm)
                 .padding(.vertical, JKSpacing.xs)
                 .background(.ultraThinMaterial, in: Capsule())
+        }
+    }
+}
+
+/// Trecho de mapa da localização de um recado publicado (D-12, plano 02-10) — recebe
+/// latitude e longitude, não o DTO inteiro: um componente do design system não precisa
+/// conhecer a forma da DTO de rede. Mapa SwiftUI pós-WWDC23 (inicializadora de posição +
+/// construtor de conteúdo com marcador — nunca a inicializadora antiga de região vinculada
+/// nem os tipos de anotação depreciados), com altura fixa do token e recorte no raio de
+/// **controle** (é um elemento pequeno dentro de um cartão, não um cartão próprio).
+///
+/// Duas escolhas fixadas pelo 02-UI-SPEC.md § Addendum: a prévia é somente-leitura por
+/// decisão — toque e gesto desabilitados, sem nenhum caminho para o app de mapas do sistema
+/// neste adendo (arrastar sobre o mapa rola o feed); e a alternativa de imagem estática
+/// renderizada e cacheada fica registrada como otimização futura, para quando o volume real
+/// de recados com localização justificar (Pitfall 4 do 02-ADDENDUM-RESEARCH.md).
+struct JKLocationPreview: View {
+    let lat: Double
+    let lng: Double
+
+    /// Span da região inicial centrada na coordenada guardada — ~1km de contexto urbano,
+    /// valor do exemplo de referência do research; constante nomeada, não literal solto.
+    private static let regionSpanDelta: CLLocationDegrees = 0.01
+
+    var body: some View {
+        Map(initialPosition: .region(region)) {
+            Marker("", coordinate: coordinate)
+        }
+        .allowsHitTesting(false)
+        .frame(height: JKLayout.locationPreviewHeight)
+        .clipShape(JKLayout.controlShape)
+    }
+
+    private var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: lat, longitude: lng)
+    }
+
+    private var region: MKCoordinateRegion {
+        MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: Self.regionSpanDelta, longitudeDelta: Self.regionSpanDelta)
+        )
+    }
+}
+
+/// Linha de compose da localização escolhida (D-12, plano 02-10) — pino preenchido tingido
+/// com o token de destaque (§Color do 02-UI-SPEC.md autoriza destaque **exatamente** aqui:
+/// seleção confirmada em tempo de compose, mesmo papel do chip de menção), campo de texto
+/// editável pré-preenchido com o nome do lugar escolhido, e botão de limpar com o glifo de
+/// "x" em círculo em tratamento neutro `.secondary` — mesmo precedente de remover uma foto
+/// anexada: é edição desfazível antes de postar, não remoção de dado real; o token
+/// destrutivo nunca entra neste componente.
+struct JKLocationField: View {
+    let text: String
+    let onTextChange: (String) -> Void
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack(spacing: JKSpacing.sm) {
+            Image(systemName: "mappin.circle.fill")
+                .foregroundStyle(JKColor.jkAccent)
+
+            TextField(
+                JKCopy.muralComposeLocationPlaceholder,
+                text: Binding(get: { text }, set: onTextChange)
+            )
+            .font(JKTypography.body)
+            .lineLimit(1)
+
+            Button(action: onClear) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: JKLayout.minTapTarget, minHeight: JKLayout.minTapTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(JKCopy.muralComposeRemoveLocationAccessibilityLabel)
         }
     }
 }
