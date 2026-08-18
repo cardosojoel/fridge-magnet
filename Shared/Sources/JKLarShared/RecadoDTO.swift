@@ -372,6 +372,30 @@ public struct CreateRecadoRequest: Codable, Sendable {
     }
 }
 
+/// Semântica de PRESENÇA do lembrete numa edição de recado (D-16, plano 02-14) — "não
+/// veio" e "veio nulo" são estados distintos do contrato, não sinônimos.
+///
+/// Por que um tipo de presença e não dois opcionais: `decodeIfPresent` devolve nulo TANTO
+/// para chave ausente QUANTO para chave presente com valor nulo, então dois opcionais não
+/// conseguem, nem em princípio, carregar a distinção que D-16 exige — o contrato deixaria
+/// de existir silenciosamente, mesmo com os campos declarados. E não a semântica de
+/// substituição da localização (ausente = limpar) porque ela quebraria a regra de edição
+/// de lembrete passado do 02-UI-SPEC.md: o cliente teria de reenviar o par guardado a
+/// cada salvamento, e um recado antigo com lembrete vencido reenviaria um par que a
+/// validação de passado recusaria — corrigir a digitação de um recado do mês passado
+/// viraria 400 permanente.
+///
+/// Por que quatro casos e não três: o caso malformado deixa o erro EXPLÍCITO no tipo em
+/// vez de virar exceção de decodificação, o que preserva o corpo de erro tipado do
+/// projeto (código `validation`) em vez do 400 genérico do framework. O caso malformado
+/// nunca é construído pelo cliente — só nasce de decodificação — e codifica como ausente.
+public enum ReminderUpdate: Sendable, Equatable {
+    case absent
+    case cleared
+    case set(eventAt: Date, remindOffsetSeconds: Int)
+    case malformed
+}
+
 /// Corpo de `PATCH /api/v1/recados/:recadoID`.
 ///
 /// `mentionedUserIDs` substitui o conjunto de menções do recado (não soma) — ver
@@ -384,26 +408,90 @@ public struct UpdateRecadoRequest: Codable, Sendable {
     /// `mentionedUserIDs`: editar sem enviar localização limpa a localização do recado,
     /// nunca a preserva. Mesmo contrato de três lugares de `CreateRecadoRequest.location`.
     public var location: RecadoLocationDTO?
+    /// Lembrete opcional (D-16, plano 02-14) — semântica de PRESENÇA, deliberadamente
+    /// diferente da substituição de `location` logo acima (ver o doc de `ReminderUpdate`
+    /// para o porquê). O padrão `absent` no init é o que mantém todos os pontos de
+    /// construção das ondas 1 a 10 compilando E o que garante que um cliente que não
+    /// conhece lembrete nunca apague o de ninguém.
+    public var reminder: ReminderUpdate
 
-    public init(text: String?, mentionedUserIDs: [UUID] = [], location: RecadoLocationDTO? = nil) {
+    public init(
+        text: String?,
+        mentionedUserIDs: [UUID] = [],
+        location: RecadoLocationDTO? = nil,
+        reminder: ReminderUpdate = .absent
+    ) {
         self.text = text
         self.mentionedUserIDs = mentionedUserIDs
         self.location = location
+        self.reminder = reminder
     }
 
     private enum CodingKeys: String, CodingKey {
         case text
         case mentionedUserIDs
         case location
+        case eventAt
+        case remindOffsetSeconds
     }
 
-    /// Mesma razão de `CreateRecadoRequest.init(from:)`: `mentionedUserIDs` ausente no JSON
-    /// decodifica como `[]`, não como erro.
+    /// Mesma razão de `CreateRecadoRequest.init(from:)` para `mentionedUserIDs` (ausente
+    /// no JSON decodifica como `[]`, não como erro). Para o lembrete, a checagem de
+    /// PRESENÇA (`container.contains(_:)`) é obrigatória e não substituível por
+    /// `decodeIfPresent`: é a única forma que existe de distinguir chave ausente de chave
+    /// presente e nula — sem ela o contrato de D-16 não existe.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.text = try container.decodeIfPresent(String.self, forKey: .text)
         self.mentionedUserIDs = try container.decodeIfPresent([UUID].self, forKey: .mentionedUserIDs) ?? []
         self.location = try container.decodeIfPresent(RecadoLocationDTO.self, forKey: .location)
+
+        let hasEventAt = container.contains(.eventAt)
+        let hasOffset = container.contains(.remindOffsetSeconds)
+        if !hasEventAt, !hasOffset {
+            self.reminder = .absent
+        } else if hasEventAt, hasOffset {
+            let eventAtIsNull = (try? container.decodeNil(forKey: .eventAt)) ?? false
+            let offsetIsNull = (try? container.decodeNil(forKey: .remindOffsetSeconds)) ?? false
+            if eventAtIsNull, offsetIsNull {
+                self.reminder = .cleared
+            } else if let eventAt = try? container.decode(Date.self, forKey: .eventAt),
+                      let offsetSeconds = try? container.decode(Int.self, forKey: .remindOffsetSeconds) {
+                self.reminder = .set(eventAt: eventAt, remindOffsetSeconds: offsetSeconds)
+            } else {
+                // Uma chave nula e a outra preenchida, ou valor de tipo errado — erro
+                // explícito no tipo, para o handler responder com o 400 tipado do projeto.
+                self.reminder = .malformed
+            }
+        } else {
+            // Exatamente uma das duas chaves presente — o par é indivisível.
+            self.reminder = .malformed
+        }
+    }
+
+    /// Encode MANUAL (o sintetizado deixa de servir assim que o campo de presença
+    /// existe). As três propriedades antigas codificam EXATAMENTE como o sintetizado
+    /// codificava — texto e localização com codificação condicional (chave omitida quando
+    /// ausente, que é o que a semântica de substituição da localização espera) e a lista
+    /// de menções sempre presente. Só o bloco de lembrete é novo: ausente e malformado
+    /// não emitem nenhuma das duas chaves; limpo emite as duas com nulo explícito;
+    /// definido emite as duas com valor.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(text, forKey: .text)
+        try container.encode(mentionedUserIDs, forKey: .mentionedUserIDs)
+        try container.encodeIfPresent(location, forKey: .location)
+
+        switch reminder {
+        case .absent, .malformed:
+            break
+        case .cleared:
+            try container.encodeNil(forKey: .eventAt)
+            try container.encodeNil(forKey: .remindOffsetSeconds)
+        case let .set(eventAt, remindOffsetSeconds):
+            try container.encode(eventAt, forKey: .eventAt)
+            try container.encode(remindOffsetSeconds, forKey: .remindOffsetSeconds)
+        }
     }
 }
 

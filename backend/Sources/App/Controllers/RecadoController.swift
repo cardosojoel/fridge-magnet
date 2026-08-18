@@ -350,6 +350,45 @@ struct RecadoController: RouteCollection {
             )
         }
 
+        // Ramificação sobre o campo de presença `reminder` — assimetria DELIBERADA com a
+        // localização logo acima (substituição lá, presença aqui, `<planner_assumptions>`
+        // item 1 do plano 02-14): um corpo que não fala de lembrete nunca toca as colunas, senão
+        // todo recado antigo com lembrete vencido ficaria impossível de editar (o cliente
+        // reenviaria o par vencido e a validação de passado o recusaria a cada
+        // salvamento). Validação DEPOIS da autoria, mesmo motivo de T-02-60. A validação
+        // temporal roda APENAS no caso "par novo": ausente e nulo explícito nunca chegam
+        // a ela — não há nada a criar que possa nunca disparar.
+        let validatedReminder: (eventAt: Date, remindOffsetSeconds: Int)?
+        switch body.reminder {
+        case .absent:
+            validatedReminder = nil
+        case .cleared:
+            validatedReminder = nil
+        case let .set(eventAt, offsetSeconds):
+            do {
+                guard let normalized = try Self.normalizeReminder(
+                    eventAt: eventAt, remindOffsetSeconds: offsetSeconds, now: Date()
+                ) else {
+                    // `set` sempre carrega as duas pontas — ausência aqui é inalcançável,
+                    // mas o contrato do helper permite, então trate como inválido.
+                    throw ReminderValidationError()
+                }
+                validatedReminder = normalized
+            } catch is ReminderValidationError {
+                return try Self.errorResponse(
+                    code: .validation,
+                    message: "O lembrete do recado é inválido.",
+                    status: .badRequest
+                )
+            }
+        case .malformed:
+            return try Self.errorResponse(
+                code: .validation,
+                message: "O lembrete do recado é inválido.",
+                status: .badRequest
+            )
+        }
+
         let requestedMentionIDs: [UUID]
         do {
             requestedMentionIDs = try await Self.resolveHouseholdMemberUserIDs(body.mentionedUserIDs, on: req.scopedDB)
@@ -393,6 +432,21 @@ struct RecadoController: RouteCollection {
         recado.locationText = normalizedLocation?.text
         recado.locationLat = normalizedLocation?.lat
         recado.locationLng = normalizedLocation?.lng
+        // Presença, NÃO substituição (assimetria deliberada com a localização acima —
+        // ver o comentário do bloco de validação): ausente não toca nas colunas, limpo
+        // grava nulo nas duas, par novo substitui.
+        switch body.reminder {
+        case .absent:
+            break
+        case .cleared:
+            recado.eventAt = nil
+            recado.remindOffsetSeconds = nil
+        case .set:
+            recado.eventAt = validatedReminder?.eventAt
+            recado.remindOffsetSeconds = validatedReminder?.remindOffsetSeconds
+        case .malformed:
+            break // Inalcançável: o caso malformado já respondeu 400 no bloco de validação.
+        }
         try await recado.save(on: req.scopedDB)
 
         try await Self.enqueueMentionPushes(
