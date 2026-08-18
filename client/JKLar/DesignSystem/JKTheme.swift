@@ -603,4 +603,23 @@ enum JKCopy {
         formatter.dateFormat = "dd/MM/yyyy HH:mm"
         return formatter
     }()
+
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Recado — event row"):
+    /// "{d 'de' MMMM 'de' yyyy 'às' HH:mm} · lembrete {antecedência}" — a antecedência na
+    /// MESMA forma inline do resumo do compose (a função inline é uma só, para o resumo e
+    /// a linha do recado nunca divergirem sobre como uma antecedência se escreve; zero
+    /// vira "· lembrete na hora").
+    static func muralRecadoEventRow(eventAt: Date, offset: ReminderOffset) -> String {
+        "\(eventRowDateFormatter.string(from: eventAt)) · lembrete \(muralReminderOffsetInlineLabel(offset))"
+    }
+
+    /// Formato `d 'de' MMMM 'de' yyyy 'às' HH:mm` da linha de evento; locale pt-BR fixo,
+    /// mesmo molde do formatador de legenda de foto — o nome do mês nunca varia com o
+    /// idioma do aparelho.
+    private static let eventRowDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "pt_BR")
+        formatter.dateFormat = "d 'de' MMMM 'de' yyyy 'às' HH:mm"
+        return formatter
+    }()
 }

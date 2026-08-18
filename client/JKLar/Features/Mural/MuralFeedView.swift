@@ -94,13 +94,23 @@ struct MuralFeedView: View {
     @ViewBuilder
     private var composeSheet: some View {
         if let editingRecado {
-            // `initialLocation` acompanha o `initialText` (plano 02-10): a rota de PATCH tem
-            // semântica de substituição para a localização — sem o pré-preenchimento, salvar
-            // uma edição apagaria a localização existente em silêncio.
+            // A localização inicial acompanha o `initialText` (plano 02-10): a rota de PATCH
+            // tem semântica de substituição para a localização — sem o pré-preenchimento,
+            // salvar uma edição apagaria a localização existente em silêncio.
+            // A pré-carga do lembrete guardado (D-16, plano 02-15) segue a semântica de
+            // PRESENÇA do plano 02-14: é o que mantém a marca de "mexeu nesta sessão"
+            // desligada quando ninguém mexeu — sem ela, a folha de configuração abriria
+            // vazia num recado que tem lembrete, e qualquer toque no lembrete depois
+            // disso mandaria um par novo em vez de preservar o guardado.
             ComposeRecadoView(
                 mode: .editing(recadoID: editingRecado.id),
                 initialText: editingRecado.text ?? "",
-                initialLocation: editingRecado.location
+                initialLocation: editingRecado.location,
+                initialReminder: editingRecado.eventAt.flatMap { eventAt in
+                    editingRecado.remindOffsetSeconds.map {
+                        ComposeRecadoViewModel.SelectedReminder(eventAt: eventAt, remindOffsetSeconds: $0)
+                    }
+                }
             ) { _ in
                 Task { await viewModel.reloadFromTop() }
             }
