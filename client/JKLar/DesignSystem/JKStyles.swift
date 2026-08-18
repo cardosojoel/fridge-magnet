@@ -1,4 +1,5 @@
 import JKLarShared
+import MapKit
 import SwiftUI
 
 /// Fundo de tela translúcido — `.ultraThinMaterial` sobre `jkScreenBackgroundBase`
@@ -422,6 +423,47 @@ struct JKPhotoDateBadge: View {
                 .padding(.vertical, JKSpacing.xs)
                 .background(.ultraThinMaterial, in: Capsule())
         }
+    }
+}
+
+/// Trecho de mapa da localização de um recado publicado (D-12, plano 02-10) — recebe
+/// latitude e longitude, não o DTO inteiro: um componente do design system não precisa
+/// conhecer a forma da DTO de rede. Mapa SwiftUI pós-WWDC23 (inicializadora de posição +
+/// construtor de conteúdo com marcador — nunca a inicializadora antiga de região vinculada
+/// nem os tipos de anotação depreciados), com altura fixa do token e recorte no raio de
+/// **controle** (é um elemento pequeno dentro de um cartão, não um cartão próprio).
+///
+/// Duas escolhas fixadas pelo 02-UI-SPEC.md § Addendum: a prévia é somente-leitura por
+/// decisão — toque e gesto desabilitados, sem nenhum caminho para o app de mapas do sistema
+/// neste adendo (arrastar sobre o mapa rola o feed); e a alternativa de imagem estática
+/// renderizada e cacheada fica registrada como otimização futura, para quando o volume real
+/// de recados com localização justificar (Pitfall 4 do 02-ADDENDUM-RESEARCH.md).
+struct JKLocationPreview: View {
+    let lat: Double
+    let lng: Double
+
+    /// Span da região inicial centrada na coordenada guardada — ~1km de contexto urbano,
+    /// valor do exemplo de referência do research; constante nomeada, não literal solto.
+    private static let regionSpanDelta: CLLocationDegrees = 0.01
+
+    var body: some View {
+        Map(initialPosition: .region(region)) {
+            Marker("", coordinate: coordinate)
+        }
+        .allowsHitTesting(false)
+        .frame(height: JKLayout.locationPreviewHeight)
+        .clipShape(JKLayout.controlShape)
+    }
+
+    private var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: lat, longitude: lng)
+    }
+
+    private var region: MKCoordinateRegion {
+        MKCoordinateRegion(
+            center: coordinate,
+            span: MKCoordinateSpan(latitudeDelta: Self.regionSpanDelta, longitudeDelta: Self.regionSpanDelta)
+        )
     }
 }
 
