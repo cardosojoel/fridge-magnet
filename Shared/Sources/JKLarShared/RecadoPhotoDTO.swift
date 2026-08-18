@@ -54,14 +54,34 @@ public struct PresignPhotoUploadResponse: Codable, Sendable {
     }
 }
 
-/// Corpo de `POST /api/v1/recados/:recadoID/photos/confirm` — as chaves que o cliente diz
-/// terem sido enviadas com sucesso ao bucket. O servidor revalida cada uma (formato + `HEAD`
-/// no armazenamento) antes de gravar qualquer linha.
-public struct ConfirmPhotoUploadRequest: Codable, Sendable {
-    public var objectKeys: [String]
+/// Uma foto a confirmar — a chave que o cliente diz ter chegado ao bucket e a data de
+/// captura lida do metadado do arquivo (D-11, plano 02-08), `nil` quando o arquivo não
+/// tinha metadado.
+///
+/// Cada foto carrega a própria data **dentro** do item (nunca um array paralelo de datas
+/// indexado por posição): o `confirm` do servidor filtra chaves já confirmadas antes de
+/// processar, e qualquer array paralelo desincronizaria no primeiro retry legítimo que
+/// mistura chave já confirmada com chave nova — a data migraria para a foto errada
+/// (02-ADDENDUM-RESEARCH.md Pitfall 3).
+public struct ConfirmPhotoUploadItem: Codable, Sendable {
+    public var objectKey: String
+    public var capturedAt: Date?
 
-    public init(objectKeys: [String]) {
-        self.objectKeys = objectKeys
+    public init(objectKey: String, capturedAt: Date?) {
+        self.objectKey = objectKey
+        self.capturedAt = capturedAt
+    }
+}
+
+/// Corpo de `POST /api/v1/recados/:recadoID/photos/confirm` — as fotos que o cliente diz
+/// terem sido enviadas com sucesso ao bucket, cada uma com a própria data de captura (ver
+/// `ConfirmPhotoUploadItem`). O servidor revalida cada chave (formato + `HEAD` no
+/// armazenamento) antes de gravar qualquer linha.
+public struct ConfirmPhotoUploadRequest: Codable, Sendable {
+    public var photos: [ConfirmPhotoUploadItem]
+
+    public init(photos: [ConfirmPhotoUploadItem]) {
+        self.photos = photos
     }
 }
 
@@ -70,10 +90,17 @@ public struct ConfirmPhotoUploadRequest: Codable, Sendable {
 public struct ConfirmedPhotoDTO: Codable, Sendable {
     public var id: UUID
     public var position: Int
+    /// Data de exibição da foto (D-11) — **já resolvida pelo servidor**: a data de captura
+    /// quando o arquivo tinha metadado plausível, senão a data de criação da linha. Não
+    /// opcional de propósito: nenhum cliente precisa de um `??` de fallback (Pitfall 6).
+    /// O valor padrão no `init` existe só para os pontos de construção anteriores a este
+    /// campo (fixtures de teste) — o servidor sempre passa explicitamente.
+    public var capturedAt: Date
 
-    public init(id: UUID, position: Int) {
+    public init(id: UUID, position: Int, capturedAt: Date = Date()) {
         self.id = id
         self.position = position
+        self.capturedAt = capturedAt
     }
 }
 

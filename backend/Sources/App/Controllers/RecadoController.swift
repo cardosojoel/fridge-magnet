@@ -815,7 +815,13 @@ struct RecadoController: RouteCollection {
             .filter(\.$recado.$id == recadoID)
             .sort(\.$position, .ascending)
             .all()
-            .map { RecadoPhotoRefDTO(id: try $0.requireID(), position: $0.position) }
+            .map {
+                RecadoPhotoRefDTO(
+                    id: try $0.requireID(),
+                    position: $0.position,
+                    capturedAt: Self.resolvedCapturedAt($0)
+                )
+            }
 
         let mentionRows = try await RecadoMention.query(on: database)
             .filter(\.$recado.$id == recadoID)
@@ -872,6 +878,20 @@ struct RecadoController: RouteCollection {
             canArchive: isMine || isAdmin,
             canUnarchive: isAdmin
         )
+    }
+
+    // MARK: Data de exibição de foto (D-11, plano 02-08)
+
+    /// O ÚNICO ponto do servidor onde o fallback de D-11 é resolvido: a data de captura do
+    /// arquivo quando havia metadado plausível, senão a data de criação da linha. Guardar
+    /// `NULL` no banco preserva a informação "não havia metadado" como estado distinto, e
+    /// resolver a exibição só aqui, na borda da DTO, garante que todo cliente — inclusive
+    /// um futuro cliente não-iOS — veja o mesmo valor sem ter de lembrar da regra
+    /// (02-ADDENDUM-RESEARCH.md Pitfall 6). Visibilidade interna (não `private`) de
+    /// propósito: `RecadoPhotoController.confirm` monta `ConfirmedPhotoDTO` com este mesmo
+    /// helper — duas cópias da regra divergiriam.
+    static func resolvedCapturedAt(_ photo: RecadoPhoto) -> Date {
+        photo.capturedAt ?? photo.createdAt ?? Date()
     }
 
     // MARK: Mapeamento RecadoComment → CommentDTO

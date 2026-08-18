@@ -30,10 +30,19 @@ public enum ReactionKind: String, Codable, Sendable, CaseIterable {
 public struct RecadoPhotoRefDTO: Codable, Sendable {
     public var id: UUID
     public var position: Int
+    /// Data de exibição da foto (D-11, plano 02-08) — **já resolvida pelo servidor** em
+    /// `RecadoController.resolvedCapturedAt`: a data de captura do arquivo quando havia
+    /// metadado plausível, senão a data de criação da linha. Não opcional de propósito:
+    /// a ausência de metadado já foi resolvida na borda da DTO, então nenhuma view precisa
+    /// de um `??` de fallback (02-ADDENDUM-RESEARCH.md Pitfall 6). O valor padrão no `init`
+    /// existe só para os pontos de construção anteriores a este campo (fixtures de teste
+    /// das ondas 1-4) — o servidor sempre passa explicitamente.
+    public var capturedAt: Date
 
-    public init(id: UUID, position: Int) {
+    public init(id: UUID, position: Int, capturedAt: Date = Date()) {
         self.id = id
         self.position = position
+        self.capturedAt = capturedAt
     }
 }
 
