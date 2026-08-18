@@ -425,6 +425,42 @@ struct JKPhotoDateBadge: View {
     }
 }
 
+/// Linha de compose da localização escolhida (D-12, plano 02-10) — pino preenchido tingido
+/// com o token de destaque (§Color do 02-UI-SPEC.md autoriza destaque **exatamente** aqui:
+/// seleção confirmada em tempo de compose, mesmo papel do chip de menção), campo de texto
+/// editável pré-preenchido com o nome do lugar escolhido, e botão de limpar com o glifo de
+/// "x" em círculo em tratamento neutro `.secondary` — mesmo precedente de remover uma foto
+/// anexada: é edição desfazível antes de postar, não remoção de dado real; o token
+/// destrutivo nunca entra neste componente.
+struct JKLocationField: View {
+    let text: String
+    let onTextChange: (String) -> Void
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack(spacing: JKSpacing.sm) {
+            Image(systemName: "mappin.circle.fill")
+                .foregroundStyle(JKColor.jkAccent)
+
+            TextField(
+                JKCopy.muralComposeLocationPlaceholder,
+                text: Binding(get: { text }, set: onTextChange)
+            )
+            .font(JKTypography.body)
+            .lineLimit(1)
+
+            Button(action: onClear) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: JKLayout.minTapTarget, minHeight: JKLayout.minTapTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(JKCopy.muralComposeRemoveLocationAccessibilityLabel)
+        }
+    }
+}
+
 /// Selo de recado fixado (D-14, plano 02-12) — pílula compacta `pin.fill` + "Fixado", no
 /// mesmo molde de `JKRoleBadge`: cápsula sobre `JKColor.jkCardSurfaceBase`, papel
 /// tipográfico de rótulo. Foreground **neutro** de propósito: a lista de usos reservados de

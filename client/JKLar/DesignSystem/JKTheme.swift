@@ -42,6 +42,10 @@ enum JKLayout {
     /// Task 2 do plano 02-13; declarado junto dos irmãos para o arquivo de tokens ser tocado
     /// uma vez só.
     static let composePhotoInviteMinHeight: CGFloat = 200
+    /// Altura fixa do trecho de mapa da localização de um recado (02-UI-SPEC.md § Native
+    /// Materials, Addendum D-12: "fixed 120pt height") — dimensão de componente declarada,
+    /// no molde de `stagedPhotoThumbnailSize`, não valor da escala de espaçamento.
+    static let locationPreviewHeight: CGFloat = 120
     static let cardCornerRadius: CGFloat = 16
     static let controlCornerRadius: CGFloat = 12
     static let sheetCornerRadius: CGFloat = 28
@@ -411,6 +415,17 @@ enum JKCopy {
 
     // Localização do recado (Adendo 1 do 02-UI-SPEC.md, D-12, plano 02-10) — mesma seção
     // de mural, mesma disciplina: toda string vem da tabela do Copywriting Contract.
+
+    /// String exata do Copywriting Contract — Addendum (linha "Compose — add location
+    /// button") — o glifo de pino com elipse acompanha o botão, nunca faz parte da string.
+    static let muralComposeAddLocationCTA = "Adicionar localização"
+    /// String exata do Copywriting Contract — Addendum (linha "Compose — location field,
+    /// after a result is picked"): placeholder do campo editável quando ele fica vazio.
+    static let muralComposeLocationPlaceholder = "Nome do local (opcional)"
+    /// String exata do Copywriting Contract — Addendum (linha "Compose — remove location")
+    /// — rótulo de acessibilidade do botão de limpar, ícone sem texto visível; tratamento
+    /// neutro, nunca destrutivo (mesmo precedente de remover uma foto anexada).
+    static let muralComposeRemoveLocationAccessibilityLabel = "Remover localização"
 
     /// String exata do Copywriting Contract — Addendum (linha "Location search sheet
     /// title").

@@ -78,6 +78,10 @@ final class ComposeRecadoViewModel {
     /// (`MentionPickerView`, plano 02-06 Task 2) — sempre um `MentionDTO.userID` real (D-06),
     /// nunca texto livre.
     private(set) var selectedMentions: [MentionDTO] = []
+    /// Localização opcional do recado (D-12, plano 02-10) — sempre um lugar resolvido pela
+    /// busca MapKit (nome editável + coordenada instantânea da escolha), nunca texto livre
+    /// sem pino por trás. Nula é "sem localização"; nunca afeta `canSubmit`.
+    private(set) var selectedLocation: RecadoLocationDTO?
 
     private let apiClient: APIClient
     private let photoUploadService: PhotoUploadService
@@ -125,11 +129,16 @@ final class ComposeRecadoViewModel {
     init(
         mode: Mode = .new,
         initialText: String = "",
+        initialLocation: RecadoLocationDTO? = nil,
         apiClient: APIClient = APIClient(),
         photoUploadService: PhotoUploadService = PhotoUploadService()
     ) {
         self.mode = mode
         self.text = initialText
+        // `UpdateRecadoRequest.location` tem semântica de SUBSTITUIÇÃO (plano 02-08): o modo
+        // edição recebe a localização atual do recado, senão o primeiro "Salvar" a apagaria
+        // em silêncio — mesmo motivo do `initialText` acima.
+        self.selectedLocation = initialLocation
         self.apiClient = apiClient
         self.photoUploadService = photoUploadService
     }
@@ -158,6 +167,33 @@ final class ComposeRecadoViewModel {
         selectedMentions = mentions
     }
 
+    /// Guarda o lugar devolvido pela folha de busca (D-12) — mesmo molde de `setMentions`:
+    /// substitui a seleção inteira, não altera `canSubmit` (localização é sempre opcional).
+    /// A coordenada é o instantâneo do momento da escolha.
+    func setLocation(name: String, lat: Double, lng: Double) {
+        selectedLocation = RecadoLocationDTO(text: name, lat: lat, lng: lng)
+    }
+
+    /// Edição do rótulo depois da escolha (ex.: acrescentar "Sala 302" ao nome da clínica):
+    /// troca só o texto, preservando latitude e longitude — a coordenada é instantâneo da
+    /// escolha e nunca é recalculada a partir do texto editado. Texto vazio depois de aparar
+    /// espaço limpa a seleção inteira: alinhamento explícito com a regra do servidor (plano
+    /// 02-08, `normalizeText` — texto vazio faz a localização inteira ser ausente), para o
+    /// compose nunca mostrar um pino que o servidor vai descartar em silêncio.
+    func updateLocationText(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            selectedLocation = nil
+            return
+        }
+        selectedLocation?.text = text
+    }
+
+    /// Desfaz a seleção de localização antes de postar — edição desfazível, não remoção de
+    /// dado real (o botão da view usa o tratamento neutro, nunca o destrutivo).
+    func clearLocation() {
+        selectedLocation = nil
+    }
+
     /// Guarda de "já em voo" (mesma disciplina de `MuralFeedViewModel.loadNextPage()`):
     /// `submit()` chamado duas vezes em concorrência dispara exatamente uma chamada de rede.
     /// Nunca limpa `text` num erro — a pessoa não perde o que digitou. Sequência obrigatória
@@ -178,11 +214,12 @@ final class ComposeRecadoViewModel {
             switch mode {
             case .new:
                 recado = try await apiClient.createRecado(
-                    CreateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs)
+                    CreateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs, location: selectedLocation)
                 )
             case .editing(let recadoID):
                 recado = try await apiClient.updateRecado(
-                    id: recadoID, UpdateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs)
+                    id: recadoID,
+                    UpdateRecadoRequest(text: text, mentionedUserIDs: mentionedUserIDs, location: selectedLocation)
                 )
             }
             lastKnownRecadoID = recado.id
