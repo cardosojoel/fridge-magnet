@@ -170,6 +170,15 @@ struct RecadoCard: View {
     /// a borda do cartão. `AsyncImage` com `jkShimmerPlaceholder` enquanto carrega — uma
     /// única foto não mostra pontos de página (o carrossel só desenha o indicador com 2+
     /// itens).
+    /// Data de captura por id de foto (D-11, plano 02-09): o carrossel renderiza a lista de
+    /// URLs assinadas (`photoURLs`), que não carrega metadado — `recado.photos` carrega o
+    /// `capturedAt` resolvido pelo servidor (plano 02-08), e as duas listas compartilham o
+    /// mesmo id de foto. Foto sem entrada no mapa (só um feed inconsistente produziria)
+    /// simplesmente não recebe legenda.
+    private var capturedAtByPhotoID: [UUID: Date] {
+        Dictionary(uniqueKeysWithValues: recado.photos.map { ($0.id, $0.capturedAt) })
+    }
+
     private var photoCarousel: some View {
         JKPhotoCarousel(items: photoURLs) { photo in
             AsyncImage(url: photo.downloadURL) { phase in
@@ -185,6 +194,15 @@ struct RecadoCard: View {
                 }
             }
             .clipped()
+            // Canto inferior ESQUERDO com recuo de JKSpacing.sm — o centro inferior é dos
+            // pontos de página do carrossel; o componente decide sozinho se aparece (só
+            // quando o dia de captura difere do dia do post, D-11).
+            .overlay(alignment: .bottomLeading) {
+                if let capturedAt = capturedAtByPhotoID[photo.id] {
+                    JKPhotoDateBadge(capturedAt: capturedAt, postedAt: recado.createdAt)
+                        .padding(JKSpacing.sm)
+                }
+            }
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(

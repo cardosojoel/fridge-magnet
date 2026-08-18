@@ -282,6 +282,17 @@ struct ComposeRecadoView: View {
                 .overlay {
                     stagedPhotoStateOverlay(photo)
                 }
+                // Legenda de data de captura (D-11, plano 02-09) no canto inferior ESQUERDO
+                // com recuo de JKSpacing.sm — o centro inferior é dos pontos de página e o
+                // superior direito é do estado de envio/remover: as três não competem. A
+                // publicação ainda não aconteceu, então "hoje" é o dia iminente do post; o
+                // componente decide sozinho se aparece (só quando o dia difere).
+                .overlay(alignment: .bottomLeading) {
+                    if let capturedAt = photo.capturedAt {
+                        JKPhotoDateBadge(capturedAt: capturedAt, postedAt: Date())
+                            .padding(JKSpacing.sm)
+                    }
+                }
 
             removeStagedPhotoButton(photo)
         }
