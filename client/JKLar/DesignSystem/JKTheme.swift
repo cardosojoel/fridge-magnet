@@ -1,4 +1,5 @@
 import Foundation
+import JKLarShared
 import SwiftUI
 
 /// Escala de espaçamento do 01-UI-SPEC.md (§ Spacing Scale). Múltiplos de 4pt — nenhuma view
@@ -456,6 +457,90 @@ enum JKCopy {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "pt_BR")
         formatter.dateFormat = "d 'de' MMMM"
+        return formatter
+    }()
+
+    // Lembrete de evento (Adendo 3 do 02-UI-SPEC.md, D-16, plano 02-15) — mesma seção de
+    // mural, mesma disciplina: toda string vem da tabela "Copywriting Contract — Addendum 3".
+    // Os identificadores de categoria/ação de notificação NÃO são cópia e vivem em
+    // `RecadoReminderScheduler`, nunca aqui.
+
+    /// String exata do Copywriting Contract — Addendum 3 (linha "Notification — title"):
+    /// o texto do recado cortado em ~60 caracteres, com corte em fronteira de palavra e
+    /// reticências; recado só de foto cai em "Recado de {autor}", com a mesma cadeia de
+    /// fallback de nome já usada no app (`householdUnnamedMember`).
+    static func muralReminderNotificationTitle(text: String?, autor: String?) -> String {
+        let trimmed = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "Recado de \(autor ?? householdUnnamedMember)"
+        }
+        return truncatedAtWordBoundary(trimmed, limit: reminderTitleCharacterLimit)
+    }
+
+    /// ~60 caracteres da linha "Notification — title" — constante nomeada, nunca um
+    /// literal solto na função de corte.
+    private static let reminderTitleCharacterLimit = 60
+
+    /// Corte em fronteira de palavra + "…" — só usado pelo título de notificação acima.
+    private static func truncatedAtWordBoundary(_ text: String, limit: Int) -> String {
+        guard text.count > limit else { return text }
+        let head = String(text.prefix(limit))
+        guard let lastSpace = head.lastIndex(where: \.isWhitespace) else {
+            return head + "…"
+        }
+        return String(head[..<lastSpace]) + "…"
+    }
+
+    /// Corpo da notificação por variante de antecedência (linhas "Notification — body"):
+    /// minutos/hora → "Evento às {HH:mm} · em {5 min | 15 min | 30 min | 1 h}"; na hora →
+    /// "Evento às {HH:mm} · agora"; 1 dia antes → forma reestruturada "Evento amanhã às
+    /// {HH:mm}" (a forma "às 13:30 · em 1 dia" esconde o dia e lê ambígua).
+    static func muralReminderNotificationBody(eventAt: Date, offset: ReminderOffset) -> String {
+        let time = reminderTimeFormatter.string(from: eventAt)
+        switch offset {
+        case .oneDay:
+            return "Evento amanhã às \(time)"
+        case .atTime:
+            return "Evento às \(time) · agora"
+        case .fiveMinutes, .fifteenMinutes, .thirtyMinutes, .oneHour:
+            return "Evento às \(time) · em \(reminderOffsetShortPhrase(offset))"
+        }
+    }
+
+    /// Corpo da variante de adiado (linha "Notification — body (após adiar)") — a frase
+    /// de antecedência é descartada: depois de um adiamento ela já não descreve o
+    /// intervalo real até o banner.
+    static func muralReminderSnoozedNotificationBody(eventAt: Date) -> String {
+        "Evento às \(reminderTimeFormatter.string(from: eventAt))"
+    }
+
+    /// Títulos das quatro ações de adiar (linha "Notification — snooze actions") — uma
+    /// função sobre os minutos, nunca quatro literais soltos.
+    static func muralReminderSnoozeAction(minutes: Int) -> String {
+        "Adiar \(minutes) min"
+    }
+
+    /// Frase curta de antecedência usada no corpo da notificação — uma função sobre o
+    /// conjunto fechado, nunca uma lista paralela de literais (mesmo motivo de
+    /// `ReminderOffset.contains(_:)` no pacote compartilhado).
+    private static func reminderOffsetShortPhrase(_ offset: ReminderOffset) -> String {
+        switch offset {
+        case .atTime: "agora"
+        case .fiveMinutes: "5 min"
+        case .fifteenMinutes: "15 min"
+        case .thirtyMinutes: "30 min"
+        case .oneHour: "1 h"
+        case .oneDay: "1 dia"
+        }
+    }
+
+    /// Formato `HH:mm` das linhas de corpo de notificação; locale pt-BR fixo, mesmo molde
+    /// do formatador de legenda de foto acima — a hora desta cópia nunca varia com o
+    /// idioma do aparelho.
+    private static let reminderTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "pt_BR")
+        formatter.dateFormat = "HH:mm"
         return formatter
     }()
 }

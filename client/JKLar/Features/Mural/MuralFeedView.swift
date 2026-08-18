@@ -23,6 +23,11 @@ struct MuralFeedView: View {
     /// tocar `MuralFeedViewModel.swift`), então a chamada mora nesta view, sempre seguida de
     /// `viewModel.reloadFromTop()` em caso de sucesso.
     private let apiClient = APIClient()
+    /// Agendador de lembrete local (D-16, plano 02-15) — instância própria, como a de
+    /// `apiClient` acima: o agendador não guarda estado, e o caminho de apagar mora nesta
+    /// view (não no view-model), então a remoção do lembrete do recado apagado mora aqui
+    /// também.
+    private let reminderScheduler = RecadoReminderScheduler()
 
     var body: some View {
         List {
@@ -101,7 +106,10 @@ struct MuralFeedView: View {
             }
         } else {
             ComposeRecadoView(mode: .new) { recado in
-                viewModel.insertLocally(recado)
+                // `insertLocally` é assíncrono desde o plano 02-15 (agenda o lembrete
+                // local do recado recém-postado no aparelho do autor) — a closure de
+                // sucesso do compose continua síncrona, então o salto é daqui.
+                Task { await viewModel.insertLocally(recado) }
             }
         }
     }
@@ -261,6 +269,10 @@ struct MuralFeedView: View {
         Task {
             do {
                 try await apiClient.deleteRecado(id: recado.id)
+                // D-16 (T-02-95): o lembrete pendente do recado apagado sai DESTE
+                // aparelho junto com o recado — a reconciliação nunca remove por
+                // ausência no lote, então a remoção explícita mora aqui.
+                reminderScheduler.cancelReminder(recadoID: recado.id)
                 await viewModel.reloadFromTop()
             } catch {
                 // O 02-UI-SPEC.md não define uma mensagem própria para "apagar falhou" fora

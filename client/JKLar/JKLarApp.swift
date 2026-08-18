@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 #if os(iOS)
 import UIKit
@@ -18,6 +19,49 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject {
     let pushRegistrationService = PushRegistrationService(apiClient: APIClient())
+    /// Agendador de lembrete local (D-16, plano 02-15) — instância própria, como todo
+    /// consumidor (o agendador não guarda estado; o estado vive nas requisições
+    /// pendentes do sistema). O delegate precisa dele para o registro de categoria no
+    /// arranque e para tratar as respostas de ação de adiar.
+    let reminderScheduler = RecadoReminderScheduler()
+
+}
+
+/// Conformidade ao delegate do centro de notificações — declarada UMA vez, fora dos ramos
+/// de plataforma (`UserNotifications` é multiplataforma; nada aqui diverge entre iOS e
+/// macOS). Dois papéis: entrega em primeiro plano com banner e som (um lembrete invisível
+/// porque a pessoa estava com o app aberto perde a única função dele — contrato do
+/// `02-UI-SPEC.md` § Addendum 3) e encaminhamento das respostas de ação para o agendador.
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        // Extrai só valores primitivos (Sendable) da resposta antes de saltar para o
+        // MainActor — o agendador decide sozinho se o identificador de ação é um adiar
+        // válido (lista fechada; toque padrão e identificadores desconhecidos são
+        // ignorados sem efeito, T-02-89).
+        let actionIdentifier = response.actionIdentifier
+        let requestIdentifier = response.notification.request.identifier
+        let title = response.notification.request.content.title
+        let userInfo = response.notification.request.content.userInfo
+        let recadoID = userInfo[RecadoReminderScheduler.userInfoRecadoIDKey] as? String
+        let eventAtSeconds = userInfo[RecadoReminderScheduler.userInfoEventAtKey] as? TimeInterval
+        await reminderScheduler.handleActionResponse(
+            actionIdentifier: actionIdentifier,
+            requestIdentifier: requestIdentifier,
+            title: title,
+            recadoID: recadoID,
+            eventAtSeconds: eventAtSeconds
+        )
+    }
 }
 
 #if os(iOS)
@@ -26,6 +70,17 @@ extension AppDelegate: UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        // D-16 (plano 02-15), nesta ordem e ANTES de qualquer outra coisa do lançamento:
+        // (1) a porta de permissão aponta para a instância viva de PushRegistrationService
+        // — o caminho de permissão continua sendo UM só, o da Fase 1; (2) o delegate do
+        // centro é atribuído já — um app aberto pela resposta a uma notificação entrega
+        // essa resposta imediatamente depois do lançamento, e um delegate atribuído tarde
+        // a perde; (3) a categoria é registrada no arranque, e não na hora de agendar:
+        // uma requisição agendada com categoria não registrada aparece SEM as quatro
+        // ações de adiar, e a falha é invisível até alguém receber um lembrete de verdade.
+        NotificationAuthorizationGateway.attach(pushRegistrationService)
+        UNUserNotificationCenter.current().delegate = self
+        reminderScheduler.registerCategories()
         Task { await pushRegistrationService.resumePendingRegistrationIfNeeded() }
         return true
     }
@@ -41,6 +96,12 @@ extension AppDelegate: UIApplicationDelegate {
 #elseif os(macOS)
 extension AppDelegate: NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // D-16 (plano 02-15) — mesma sequência e mesmo motivo do ramo iOS acima: porta de
+        // permissão → delegate do centro → categoria registrada, tudo antes de qualquer
+        // outra coisa do lançamento.
+        NotificationAuthorizationGateway.attach(pushRegistrationService)
+        UNUserNotificationCenter.current().delegate = self
+        reminderScheduler.registerCategories()
         Task { await pushRegistrationService.resumePendingRegistrationIfNeeded() }
     }
 

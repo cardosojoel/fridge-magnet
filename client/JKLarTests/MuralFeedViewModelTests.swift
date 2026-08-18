@@ -1,5 +1,6 @@
 import XCTest
 import JKLarShared
+import UserNotifications
 @testable import JKLar
 
 /// Transporte falso que roteia `GET api/v1/recados` (com/sem `?cursor=`) — dono deste
@@ -379,13 +380,47 @@ private actor MuralFeedArchiveGatedTransport: APIClientTransport {
     }
 }
 
+/// Centro de notificações falso local deste arquivo (mesma disciplina de stub por arquivo
+/// dos transportes acima) — o view-model recebe um agendador REAL
+/// (`RecadoReminderScheduler`) construído sobre este centro falso: o que se prova aqui é
+/// a ligação das quatro entradas de dado do mural, não a regra interna do agendador (essa
+/// é provada em `RecadoReminderSchedulerTests`).
+@MainActor
+private final class MuralFeedFakeNotificationCenter: LocalNotificationScheduling {
+    private(set) var scheduledRequests: [UNNotificationRequest] = []
+    private(set) var removedIdentifiers: [String] = []
+    var pendingRequests: [UNNotificationRequest] = []
+
+    func scheduleRequest(_ request: UNNotificationRequest) async throws {
+        scheduledRequests.append(request)
+        pendingRequests.removeAll { $0.identifier == request.identifier }
+        pendingRequests.append(request)
+    }
+
+    func listPendingRequests() async -> [UNNotificationRequest] {
+        pendingRequests
+    }
+
+    func removePending(identifiers: [String]) {
+        removedIdentifiers.append(contentsOf: identifiers)
+        pendingRequests.removeAll { identifiers.contains($0.identifier) }
+    }
+
+    func replaceCategories(_ categories: Set<UNNotificationCategory>) {}
+
+    func readAuthorizationStatus() async -> UNAuthorizationStatus {
+        .authorized
+    }
+}
+
 @MainActor
 final class MuralFeedViewModelTests: XCTestCase {
     private func url() -> URL { URL(string: "http://test.local")! }
 
     private func makeRecado(
         id: UUID = UUID(), sequence: Int64, text: String = "Oi", photos: [RecadoPhotoRefDTO] = [],
-        pinnedAt: Date? = nil, canPin: Bool = false, canArchive: Bool = false
+        pinnedAt: Date? = nil, canPin: Bool = false, canArchive: Bool = false,
+        eventAt: Date? = nil, remindOffsetSeconds: Int? = nil
     ) -> RecadoDTO {
         RecadoDTO(
             id: id,
@@ -404,7 +439,9 @@ final class MuralFeedViewModelTests: XCTestCase {
             latestComments: [],
             pinnedAt: pinnedAt,
             canPin: canPin,
-            canArchive: canArchive
+            canArchive: canArchive,
+            eventAt: eventAt,
+            remindOffsetSeconds: remindOffsetSeconds
         )
     }
 
@@ -588,7 +625,7 @@ final class MuralFeedViewModelTests: XCTestCase {
         let callCountBeforeInsert = await gated.callCount
 
         let newRecado = makeRecado(sequence: 3, text: "Recém publicado")
-        sut.insertLocally(newRecado)
+        await sut.insertLocally(newRecado)
 
         let callCountAfterInsert = await gated.callCount
         XCTAssertEqual(callCountAfterInsert, callCountBeforeInsert, "insertLocally nunca chama a rede")
@@ -1199,5 +1236,102 @@ final class MuralFeedViewModelTests: XCTestCase {
         // última resposta do servidor.
         XCTAssertEqual(sut.items.map(\.id), [other.id], "estado final consistente com a última resposta do servidor")
         XCTAssertEqual(Set(sut.items.map(\.id)).count, sut.items.count, "nenhuma remoção de índice errado")
+    }
+
+    // MARK: Reconciliação do lembrete local (D-16, plano 02-15)
+
+    private func makeReminderTestPair(
+        transport: MuralFeedStubTransport
+    ) -> (MuralFeedViewModel, MuralFeedFakeNotificationCenter) {
+        let center = MuralFeedFakeNotificationCenter()
+        let sut = MuralFeedViewModel(
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            reminderScheduler: RecadoReminderScheduler(center: center)
+        )
+        return (sut, center)
+    }
+
+    func testLoadReconcilesRemindersWithStreamAndPinnedBlockTogether() async {
+        let futureEvent = Date().addingTimeInterval(86_400)
+        let streamRecado = makeRecado(sequence: 2, eventAt: futureEvent, remindOffsetSeconds: 900)
+        let pinnedRecado = makeRecado(
+            sequence: 9, pinnedAt: Date(), canPin: true,
+            eventAt: futureEvent, remindOffsetSeconds: 300
+        )
+        let page = RecadoFeedPage(items: [streamRecado], nextCursor: nil, pinned: [pinnedRecado])
+        let transport = MuralFeedStubTransport(firstPage: .page(page))
+        let (sut, center) = makeReminderTestPair(transport: transport)
+
+        await sut.load()
+
+        XCTAssertEqual(
+            Set(center.scheduledRequests.map(\.identifier)),
+            Set([
+                RecadoReminderScheduler.requestIdentifier(for: streamRecado.id),
+                RecadoReminderScheduler.requestIdentifier(for: pinnedRecado.id),
+            ]),
+            "a carga inicial reconcilia fluxo E bloco de fixados juntos — um fixado com lembrete não fica sem agendamento"
+        )
+    }
+
+    func testLoadNextPageReconcilesRemindersOnlyWithNewPageRecados() async {
+        let futureEvent = Date().addingTimeInterval(86_400)
+        let firstItem = makeRecado(sequence: 2, eventAt: futureEvent, remindOffsetSeconds: 900)
+        let firstPage = RecadoFeedPage(items: [firstItem], nextCursor: 1)
+        let secondItem = makeRecado(sequence: 1, eventAt: futureEvent, remindOffsetSeconds: 300)
+        let secondPage = RecadoFeedPage(items: [secondItem], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage), cursoredPages: [1: .page(secondPage)])
+        let (sut, center) = makeReminderTestPair(transport: transport)
+        await sut.load()
+        let scheduledAfterLoad = center.scheduledRequests.count
+
+        await sut.loadNextPage()
+
+        XCTAssertEqual(scheduledAfterLoad, 1, "pré-condição: a carga inicial agendou o item da primeira página")
+        XCTAssertEqual(center.scheduledRequests.count, 2, "a próxima página só reconcilia os itens novos")
+        XCTAssertEqual(
+            center.scheduledRequests.last?.identifier,
+            RecadoReminderScheduler.requestIdentifier(for: secondItem.id)
+        )
+    }
+
+    func testInsertLocallyReconcilesReminderOfInsertedRecado() async {
+        let firstPage = RecadoFeedPage(items: [makeRecado(sequence: 2)], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        let (sut, center) = makeReminderTestPair(transport: transport)
+        await sut.load()
+        XCTAssertTrue(center.scheduledRequests.isEmpty, "pré-condição: a primeira página não tinha lembrete")
+
+        let newRecado = makeRecado(
+            sequence: 3, text: "Recém publicado",
+            eventAt: Date().addingTimeInterval(86_400), remindOffsetSeconds: 0
+        )
+        await sut.insertLocally(newRecado)
+
+        XCTAssertEqual(
+            center.scheduledRequests.map(\.identifier),
+            [RecadoReminderScheduler.requestIdentifier(for: newRecado.id)],
+            "o recado recém-postado agenda no aparelho do autor — o autor é membro da casa como qualquer outro"
+        )
+    }
+
+    func testArchiveCancelsPendingReminderOfArchivedRecadoOnThisDevice() async {
+        let recado = makeRecado(
+            sequence: 2, canArchive: true,
+            eventAt: Date().addingTimeInterval(86_400), remindOffsetSeconds: 900
+        )
+        let firstPage = RecadoFeedPage(items: [recado], nextCursor: nil)
+        let transport = MuralFeedStubTransport(firstPage: .page(firstPage))
+        await transport.setArchiveOutcome(.success(recado))
+        let (sut, center) = makeReminderTestPair(transport: transport)
+        await sut.load()
+        let identifier = RecadoReminderScheduler.requestIdentifier(for: recado.id)
+        XCTAssertEqual(center.pendingRequests.map(\.identifier), [identifier], "pré-condição: a carga agendou o lembrete")
+        await transport.setFirstPage(.page(RecadoFeedPage(items: [], nextCursor: nil)))
+
+        await sut.archive(recadoID: recado.id)
+
+        XCTAssertTrue(center.removedIdentifiers.contains(identifier), "arquivar remove o lembrete pendente deste aparelho")
+        XCTAssertTrue(center.pendingRequests.isEmpty)
     }
 }

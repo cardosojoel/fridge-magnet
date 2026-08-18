@@ -61,9 +61,22 @@ final class MuralFeedViewModel {
     private var isLoadingPage = false
 
     private let apiClient: APIClient
+    /// Agendador de lembrete local (D-16, plano 02-15) — instância própria com valor
+    /// padrão, mesmo padrão de `APIClient()`: o agendador não guarda estado (o estado
+    /// vive nas requisições pendentes do sistema), então cada consumidor constrói a sua.
+    ///
+    /// Quatro entradas de dado reconciliam — carga inicial (fluxo + bloco de fixados),
+    /// próxima página (só itens novos), inserção local e o arquivamento (que cancela) —
+    /// e NENHUMA quinta existe de propósito: a folha de detalhe recebe o mesmo recado que
+    /// o feed já reconciliou e só busca comentários; ao fechar, o feed recarrega do topo
+    /// (plano 02-07), o que reconcilia de novo. Uma chamada extra "por garantia" na
+    /// abertura do detalhe só churnaria a requisição pendente a cada folha aberta
+    /// (`<planner_assumptions>` item 5 do plano 02-15).
+    private let reminderScheduler: RecadoReminderScheduler
 
-    init(apiClient: APIClient = APIClient()) {
+    init(apiClient: APIClient = APIClient(), reminderScheduler: RecadoReminderScheduler = RecadoReminderScheduler()) {
         self.apiClient = apiClient
+        self.reminderScheduler = reminderScheduler
     }
 
     /// Carga inicial (ou "Tentar de novo" depois de um erro) — sempre busca a primeira
@@ -86,6 +99,10 @@ final class MuralFeedViewModel {
             // porque o mapa de URLs é indexado por recado e o recado fixado nunca teria
             // entrado na chamada em lote.
             await fetchPhotoURLs(for: items + pinnedItems)
+            // Lembrete local (D-16, plano 02-15): fluxo E bloco de fixados juntos, pelo
+            // mesmo motivo da união acima — um recado fixado com lembrete não pode ficar
+            // sem agendamento por estar no bloco.
+            await reminderScheduler.reconcile(items + pinnedItems)
         } catch {
             state = .error(message: JKCopy.muralFeedLoadError, lastGood: previousGood)
         }
@@ -151,8 +168,11 @@ final class MuralFeedViewModel {
             pageState = page.nextCursor == nil ? .exhausted : .idle
             state = .loaded(items: items)
             // Só os recados da página nova — os já carregados já têm (ou já tentaram) sua
-            // busca de URLs, refazer a chamada pra eles seria trabalho repetido.
+            // busca de URLs, refazer a chamada pra eles seria trabalho repetido. Mesmo
+            // critério para o lembrete local (D-16): itens já carregados já foram
+            // reconciliados na própria página.
             await fetchPhotoURLs(for: newItems)
+            await reminderScheduler.reconcile(newItems)
         } catch {
             pageState = .failed(message: JKCopy.muralFeedLoadMoreError)
         }
@@ -165,10 +185,13 @@ final class MuralFeedViewModel {
     }
 
     /// Usado pelo compose (`ComposeRecadoView`, plano 02-05 Task 3): põe o recado recém-
-    /// publicado na primeira posição sem refazer nenhuma chamada de rede.
-    func insertLocally(_ recado: RecadoDTO) {
+    /// publicado na primeira posição sem refazer nenhuma chamada de rede. Assíncrono
+    /// desde o plano 02-15: o lembrete local do recado recém-postado é agendado aqui —
+    /// inclusive no aparelho do AUTOR, que é membro da casa como qualquer outro (D-16).
+    func insertLocally(_ recado: RecadoDTO) async {
         items.insert(recado, at: 0)
         state = .loaded(items: items)
+        await reminderScheduler.reconcile([recado])
     }
 
     /// A view chama isto no `.task` da própria linha, comparando com o id recebido — a
@@ -263,6 +286,10 @@ final class MuralFeedViewModel {
         actionErrorRecadoID = nil
         do {
             _ = try await apiClient.archiveRecado(id: recadoID)
+            // D-16 (T-02-95): quem arquivou remove o lembrete pendente DESTE aparelho
+            // imediatamente, antes da recarga — a reconciliação nunca faria isso sozinha,
+            // porque recado ausente do lote nunca é tocado (T-02-93).
+            reminderScheduler.cancelReminder(recadoID: recadoID)
             if let location = locate(recadoID: recadoID) {
                 switch location {
                 case .stream(let index):
