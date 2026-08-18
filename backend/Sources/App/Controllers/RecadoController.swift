@@ -15,6 +15,12 @@ private struct MentionValidationError: Error {}
 /// `MentionValidationError`: a mensagem final descreve o problema sem ecoar o valor recebido.
 private struct LocationValidationError: Error {}
 
+/// Sinaliza um lembrete malformado (par incompleto, antecedência fora do conjunto fechado
+/// ou disparo no passado) — o handler converte em 400 `validation` (plano 02-14, D-16).
+/// Mesmo molde de `LocationValidationError`: a mensagem final descreve o problema sem
+/// ecoar o valor recebido.
+private struct ReminderValidationError: Error {}
+
 /// `POST /api/v1/recados`, `GET /api/v1/recados`, `PATCH /api/v1/recados/:recadoID`,
 /// `DELETE /api/v1/recados/:recadoID` — plano 02-01 (MURAL-01 parte texto, MURAL-05),
 /// menções estruturadas + fan-out de push por menção plano 02-02 (MURAL-02, MURAL-03).
@@ -43,6 +49,15 @@ struct RecadoController: RouteCollection {
 
     /// Quantos comentários mais recentes o card do feed mostra (02-UI-SPEC.md).
     static let latestCommentsLimit = 2
+
+    /// Tolerância de RELÓGIO E LATÊNCIA na validação de disparo do lembrete (D-16, plano
+    /// 02-14): o cliente valida o disparo contra o próprio relógio e só então manda a
+    /// requisição; entre uma coisa e outra existem latência de rede e desvio de relógio
+    /// entre aparelho e servidor — uma comparação exata recusaria requisições legítimas
+    /// marcadas para "daqui a um minuto". NÃO é um recurso de produto e NÃO é uma
+    /// permissão para agendar no passado: aplicada só na borda, um par realmente vencido
+    /// continua sendo recusado.
+    static let reminderPastToleranceSeconds: TimeInterval = 120
 
     /// Guarda de tamanho de resposta da listagem de arquivados (plano 02-11) — NÃO um
     /// recurso de navegação: o 02-UI-SPEC.md não define paginação para a tela de
@@ -127,6 +142,25 @@ struct RecadoController: RouteCollection {
             )
         }
 
+        // Validação de lembrete no MESMO bloco de validações pré-gravação (D-16): um par
+        // inválido recusa a requisição inteira — nem o recado, nem as menções, nem a
+        // localização são persistidos. Na criação todo par é novo, então a validação de
+        // disparo no passado sempre roda (a assimetria com a edição está em `update`).
+        let normalizedReminder: (eventAt: Date, remindOffsetSeconds: Int)?
+        do {
+            normalizedReminder = try Self.normalizeReminder(
+                eventAt: body.eventAt,
+                remindOffsetSeconds: body.remindOffsetSeconds,
+                now: Date()
+            )
+        } catch is ReminderValidationError {
+            return try Self.errorResponse(
+                code: .validation,
+                message: "O lembrete do recado é inválido.",
+                status: .badRequest
+            )
+        }
+
         // Validação de menção ANTES de qualquer gravação (recado ou linha de menção) — um
         // id fora da casa recusa a request inteira, nada é persistido (T-02-09).
         let mentionedUserIDs: [UUID]
@@ -157,6 +191,9 @@ struct RecadoController: RouteCollection {
         recado.locationText = normalizedLocation?.text
         recado.locationLat = normalizedLocation?.lat
         recado.locationLng = normalizedLocation?.lng
+        // Ausência grava as duas colunas nulas — o par anda sempre junto (D-16).
+        recado.eventAt = normalizedReminder?.eventAt
+        recado.remindOffsetSeconds = normalizedReminder?.remindOffsetSeconds
         try await recado.save(on: req.scopedDB)
 
         let recadoID = try recado.requireID()
@@ -313,6 +350,45 @@ struct RecadoController: RouteCollection {
             )
         }
 
+        // Ramificação sobre o campo de presença `reminder` — assimetria DELIBERADA com a
+        // localização logo acima (substituição lá, presença aqui, `<planner_assumptions>`
+        // item 1 do plano 02-14): um corpo que não fala de lembrete nunca toca as colunas, senão
+        // todo recado antigo com lembrete vencido ficaria impossível de editar (o cliente
+        // reenviaria o par vencido e a validação de passado o recusaria a cada
+        // salvamento). Validação DEPOIS da autoria, mesmo motivo de T-02-60. A validação
+        // temporal roda APENAS no caso "par novo": ausente e nulo explícito nunca chegam
+        // a ela — não há nada a criar que possa nunca disparar.
+        let validatedReminder: (eventAt: Date, remindOffsetSeconds: Int)?
+        switch body.reminder {
+        case .absent:
+            validatedReminder = nil
+        case .cleared:
+            validatedReminder = nil
+        case let .set(eventAt, offsetSeconds):
+            do {
+                guard let normalized = try Self.normalizeReminder(
+                    eventAt: eventAt, remindOffsetSeconds: offsetSeconds, now: Date()
+                ) else {
+                    // `set` sempre carrega as duas pontas — ausência aqui é inalcançável,
+                    // mas o contrato do helper permite, então trate como inválido.
+                    throw ReminderValidationError()
+                }
+                validatedReminder = normalized
+            } catch is ReminderValidationError {
+                return try Self.errorResponse(
+                    code: .validation,
+                    message: "O lembrete do recado é inválido.",
+                    status: .badRequest
+                )
+            }
+        case .malformed:
+            return try Self.errorResponse(
+                code: .validation,
+                message: "O lembrete do recado é inválido.",
+                status: .badRequest
+            )
+        }
+
         let requestedMentionIDs: [UUID]
         do {
             requestedMentionIDs = try await Self.resolveHouseholdMemberUserIDs(body.mentionedUserIDs, on: req.scopedDB)
@@ -356,6 +432,21 @@ struct RecadoController: RouteCollection {
         recado.locationText = normalizedLocation?.text
         recado.locationLat = normalizedLocation?.lat
         recado.locationLng = normalizedLocation?.lng
+        // Presença, NÃO substituição (assimetria deliberada com a localização acima —
+        // ver o comentário do bloco de validação): ausente não toca nas colunas, limpo
+        // grava nulo nas duas, par novo substitui.
+        switch body.reminder {
+        case .absent:
+            break
+        case .cleared:
+            recado.eventAt = nil
+            recado.remindOffsetSeconds = nil
+        case .set:
+            recado.eventAt = validatedReminder?.eventAt
+            recado.remindOffsetSeconds = validatedReminder?.remindOffsetSeconds
+        case .malformed:
+            break // Inalcançável: o caso malformado já respondeu 400 no bloco de validação.
+        }
         try await recado.save(on: req.scopedDB)
 
         try await Self.enqueueMentionPushes(
@@ -917,6 +1008,21 @@ struct RecadoController: RouteCollection {
             location = nil
         }
 
+        // Lembrete só quando AS DUAS colunas estão presentes — qualquer combinação
+        // parcial (que só um UPDATE manual no banco produziria) devolve ausência nas duas
+        // pontas, nunca um lembrete meio montado que o cliente teria de defender (D-16,
+        // mesmo precedente do bloco de localização acima). Este é o ponto ÚNICO que
+        // alimenta as nove rotas que devolvem recado.
+        let reminderEventAt: Date?
+        let reminderOffsetSeconds: Int?
+        if let eventAt = recado.eventAt, let offsetSeconds = recado.remindOffsetSeconds {
+            reminderEventAt = eventAt
+            reminderOffsetSeconds = offsetSeconds
+        } else {
+            reminderEventAt = nil
+            reminderOffsetSeconds = nil
+        }
+
         return RecadoDTO(
             id: recadoID,
             authorID: recado.$author.id,
@@ -937,7 +1043,9 @@ struct RecadoController: RouteCollection {
             canPin: isMine || isAdmin,
             canArchive: isMine || isAdmin,
             canUnarchive: isAdmin,
-            location: location
+            location: location,
+            eventAt: reminderEventAt,
+            remindOffsetSeconds: reminderOffsetSeconds
         )
     }
 
@@ -1174,6 +1282,43 @@ struct RecadoController: RouteCollection {
             throw LocationValidationError()
         }
         return RecadoLocationDTO(text: trimmed, lat: location.lat, lng: location.lng)
+    }
+
+    /// Valida e normaliza o par de lembrete (D-16, plano 02-14) — chamado ANTES de
+    /// qualquer gravação, no mesmo bloco de validações de `normalizeLocation`:
+    /// - As duas pontas nulas → ausência (`nil` sai): "sem lembrete" é estado legítimo.
+    /// - Exatamente UMA ponta nula → lança: o par é indivisível, nunca persistido pela
+    ///   metade.
+    /// - Antecedência fora do conjunto fechado (inclusive negativa — negativa nunca está
+    ///   no conjunto, não existe regra separada para ela) → lança. A checagem é a
+    ///   inicialização por raw value do enum compartilhado `ReminderOffset`, NUNCA uma
+    ///   comparação de seis números escrita aqui (T-02-81).
+    /// - Disparo (evento menos antecedência) anterior a `now` menos
+    ///   `reminderPastToleranceSeconds` → lança: o evento estar no futuro não basta.
+    ///
+    /// `now` é parâmetro explícito em vez de lido de dentro da função para o teste poder
+    /// fixar o instante sem esperar relógio real.
+    private static func normalizeReminder(
+        eventAt: Date?,
+        remindOffsetSeconds: Int?,
+        now: Date
+    ) throws -> (eventAt: Date, remindOffsetSeconds: Int)? {
+        switch (eventAt, remindOffsetSeconds) {
+        case (nil, nil):
+            return nil
+        case let (.some(eventAt), .some(offsetSeconds)):
+            guard ReminderOffset.contains(offsetSeconds) else {
+                throw ReminderValidationError()
+            }
+            let fireAt = eventAt.addingTimeInterval(-TimeInterval(offsetSeconds))
+            guard fireAt >= now.addingTimeInterval(-Self.reminderPastToleranceSeconds) else {
+                throw ReminderValidationError()
+            }
+            return (eventAt, offsetSeconds)
+        default:
+            // Exatamente uma ponta preenchida — o par é indivisível (T-02-82).
+            throw ReminderValidationError()
+        }
     }
 
     /// Trim + normaliza string vazia para `nil` (D-01: um recado sem texto tem `text ==

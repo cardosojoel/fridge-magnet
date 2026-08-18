@@ -57,6 +57,24 @@ final class Recado: Model, @unchecked Sendable {
     @OptionalField(key: "location_lng")
     var locationLng: Double?
 
+    /// Instante do EVENTO do lembrete opcional (D-16, plano 02-14) — `nil` é "sem
+    /// lembrete". Coluna aditiva de `AddRecadoEventReminder`. Anda SEMPRE junto de
+    /// `remindOffsetSeconds`: ou as duas colunas estão preenchidas (lembrete presente) ou
+    /// as duas são nulas (ausente) — invariante mantida pelo controller
+    /// (`normalizeReminder` na escrita, `buildDTO` na leitura), nunca pelo schema, mesmo
+    /// precedente das três colunas de localização. Atribuída por propriedade pelos
+    /// handlers (`create`/`update`), nunca pelo `init`.
+    @OptionalField(key: "event_at")
+    var eventAt: Date?
+
+    /// Antecedência do lembrete em SEGUNDOS antes de `eventAt` (D-16) — `nil` é "sem
+    /// lembrete"; ver `eventAt` para a invariante de par indivisível. Sempre um valor do
+    /// conjunto fechado `ReminderOffset` (validado por `normalizeReminder` na borda HTTP,
+    /// nunca aqui), nunca negativa. Atribuída por propriedade pelos handlers, nunca pelo
+    /// `init`.
+    @OptionalField(key: "remind_offset_seconds")
+    var remindOffsetSeconds: Int?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
