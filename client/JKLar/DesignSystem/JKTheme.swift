@@ -409,6 +409,23 @@ enum JKCopy {
     /// CTA").
     static let muralArchivedUnarchiveCTA = "Desarquivar"
 
+    // Localização do recado (Adendo 1 do 02-UI-SPEC.md, D-12, plano 02-10) — mesma seção
+    // de mural, mesma disciplina: toda string vem da tabela do Copywriting Contract.
+
+    /// String exata do Copywriting Contract — Addendum (linha "Location search sheet
+    /// title").
+    static let muralLocationSearchTitle = "Buscar localização"
+    /// String exata do Copywriting Contract — Addendum (linha "Location search field
+    /// placeholder") — o glifo de lupa acompanha o campo, nunca faz parte da string.
+    static let muralLocationSearchPlaceholder = "Buscar endereço ou local"
+    /// String exata do Copywriting Contract — Addendum (linha "Location search — no
+    /// results").
+    static let muralLocationSearchNoResults = "Nenhum resultado encontrado."
+    /// String exata do Copywriting Contract — Addendum (linha "Location search — error") —
+    /// exibida inline na folha de busca, tanto para falha do completador quanto para falha
+    /// de resolução de uma escolha; a linha do compose nunca mostra estado quebrado.
+    static let muralLocationSearchError = "Não foi possível buscar. Tente de novo."
+
     /// String do Copywriting Contract — Addendum D-11 (linha "Photo — captured-date
     /// caption"): "Tirada em {data}", data pt-BR em formato longo de dia e mês (ex.:
     /// "Tirada em 12 de março"). Renderizada só pelo componente de legenda do design
