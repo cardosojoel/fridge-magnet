@@ -19,6 +19,11 @@ enum GoogleSignInError: Error, Equatable {
     case cancelled
     case missingPresentingSurface
     case missingIdentityToken
+    /// `GIDClientID` ausente/vazio no Info.plist (Local.xcconfig sem `GOOGLE_CLIENT_ID`).
+    /// Sem este guard o `GIDSignIn` lança `NSInvalidArgumentException` não-capturável e
+    /// derruba o app inteiro — visto no dogfooding de 2026-08-17 (2 crashes reais). Espelho
+    /// do `.configurationFailure` que `MicrosoftSignInService` já tinha.
+    case notConfigured
     case other(String)
 }
 
@@ -35,7 +40,22 @@ protocol GoogleSignInServiceProtocol: Sendable {
 /// `GIDSignIn.sharedInstance.signOut()` (via este serviço) para que o token do provedor não
 /// continue residente no dispositivo (D-12).
 struct GoogleSignInService: GoogleSignInServiceProtocol {
+    /// Valida o `GIDClientID` ANTES de qualquer chamada ao SDK — função pura para o teste
+    /// unitário cobrir os três estados sem tocar o singleton `GIDSignIn` (que crasharia o
+    /// runner de teste do mesmo jeito que crashava o app).
+    static func configurationError(clientID: String?) -> GoogleSignInError? {
+        guard let clientID, !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .notConfigured
+        }
+        return nil
+    }
+
     func signIn() async -> Result<GoogleSignInResult, GoogleSignInError> {
+        let clientID = Bundle.main.object(forInfoDictionaryKey: "GIDClientID") as? String
+        if let configurationError = Self.configurationError(clientID: clientID) {
+            return .failure(configurationError)
+        }
+
         #if os(iOS)
         guard let presenter = await Self.topmostViewController() else {
             return .failure(.missingPresentingSurface)
