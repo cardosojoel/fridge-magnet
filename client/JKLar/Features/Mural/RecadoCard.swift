@@ -83,6 +83,8 @@ struct RecadoCard: View {
                     JKMentionChipRow(mentions: recado.mentions)
                 }
 
+                eventSection
+
                 locationSection
 
                 reactionSection
@@ -121,6 +123,30 @@ struct RecadoCard: View {
             Button(JKCopy.cancelButtonLabel, role: .cancel) {}
         } message: {
             Text(JKCopy.muralRecadoArchiveConfirmMessage)
+        }
+    }
+
+    /// Linha de evento do lembrete (D-16, plano 02-15) — espelho declarado da seção de
+    /// localização logo abaixo: glifo de sino preenchido em tom **secundário** — e nunca
+    /// o token de destaque, porque um lembrete publicado não é mais uma seleção ativa,
+    /// exatamente o precedente do pino de localização publicada — mais o texto no papel
+    /// de rótulo, em tom secundário, quebrando em até duas linhas. Nada é desenhado
+    /// quando o par não vem (ausência é silêncio, como foto/menção/localização). Tocar a
+    /// linha não faz nada, por decisão — é conteúdo, não controle. A ordem completa do
+    /// corpo passa a ser: selo de fixado, cabeçalho, fotos, texto, menções, **evento**,
+    /// localização, reações, comentários (§ Native Materials + Supersessões do Adendo 3).
+    @ViewBuilder
+    private var eventSection: some View {
+        if let eventAt = recado.eventAt,
+           let offsetSeconds = recado.remindOffsetSeconds,
+           let offset = ReminderOffset(rawValue: offsetSeconds) {
+            HStack(alignment: .firstTextBaseline, spacing: JKSpacing.xs) {
+                Image(systemName: "bell.fill")
+                Text(JKCopy.muralRecadoEventRow(eventAt: eventAt, offset: offset))
+                    .lineLimit(2)
+            }
+            .font(JKTypography.label)
+            .foregroundStyle(.secondary)
         }
     }
 

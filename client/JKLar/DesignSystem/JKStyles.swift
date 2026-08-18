@@ -503,6 +503,51 @@ struct JKLocationField: View {
     }
 }
 
+/// Linha de compose do lembrete escolhido (D-16, plano 02-15) — espelho declarado de
+/// `JKLocationField` logo acima, com DUAS diferenças de contrato: o texto é um RESUMO
+/// derivado do par (data/hora + antecedência), não editável — não é um rótulo que a
+/// pessoa escreve, ao contrário do campo de localização —, e o toque no resumo REABRE a
+/// folha de configuração pré-preenchida. Sino preenchido tingido com o token de destaque
+/// `jkAccent`: o `02-UI-SPEC.md` § Addendum 3 autoriza **exatamente** este uso novo de
+/// destaque neste adendo (seleção confirmada em tempo de compose, mesmo papel do pino de
+/// localização). Botão de limpar com "x" em círculo em tratamento neutro `.secondary`,
+/// área de toque mínima e rótulo de acessibilidade da tabela de cópia — o tratamento
+/// destrutivo nunca entra neste componente: limpar antes de postar é edição desfazível,
+/// não remoção de dado real.
+struct JKReminderField: View {
+    let summary: String
+    let onTapSummary: () -> Void
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack(spacing: JKSpacing.sm) {
+            Button(action: onTapSummary) {
+                HStack(spacing: JKSpacing.sm) {
+                    Image(systemName: "bell.fill")
+                        .foregroundStyle(JKColor.jkAccent)
+
+                    Text(summary)
+                        .font(JKTypography.body)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onClear) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: JKLayout.minTapTarget, minHeight: JKLayout.minTapTarget)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(JKCopy.muralComposeRemoveReminderAccessibilityLabel)
+        }
+    }
+}
+
 /// Selo de recado fixado (D-14, plano 02-12) — pílula compacta `pin.fill` + "Fixado", no
 /// mesmo molde de `JKRoleBadge`: cápsula sobre `JKColor.jkCardSurfaceBase`, papel
 /// tipográfico de rótulo. Foreground **neutro** de propósito: a lista de usos reservados de

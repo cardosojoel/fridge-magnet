@@ -43,6 +43,8 @@ struct RecadoDetailView: View {
                         JKMentionChipRow(mentions: viewModel.recado.mentions)
                     }
 
+                    eventSection
+
                     locationSection
 
                     reactionSection
@@ -117,6 +119,28 @@ struct RecadoDetailView: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .clipShape(JKLayout.cardShape)
+    }
+
+    /// Linha de evento do lembrete (D-16, plano 02-15) — a MESMA linha do cartão do feed,
+    /// na mesma posição relativa (entre os chips de menção e a localização), com o mesmo
+    /// texto e sem nenhuma afordância a mais: o contrato diz explicitamente que a linha é
+    /// idêntica nos dois lugares, e tocar nela não faz nada. A duplicação aceita é a
+    /// mesma já declarada para a localização logo abaixo: a composição de duas linhas se
+    /// repete, a regra de formatação não — ela mora na função de cópia da linha de evento
+    /// em `JKCopy`.
+    @ViewBuilder
+    private var eventSection: some View {
+        if let eventAt = viewModel.recado.eventAt,
+           let offsetSeconds = viewModel.recado.remindOffsetSeconds,
+           let offset = ReminderOffset(rawValue: offsetSeconds) {
+            HStack(alignment: .firstTextBaseline, spacing: JKSpacing.xs) {
+                Image(systemName: "bell.fill")
+                Text(JKCopy.muralRecadoEventRow(eventAt: eventAt, offset: offset))
+                    .lineLimit(2)
+            }
+            .font(JKTypography.label)
+            .foregroundStyle(.secondary)
+        }
     }
 
     /// Mesma composição de dois elementos do cartão do feed (D-12, plano 02-10), na mesma

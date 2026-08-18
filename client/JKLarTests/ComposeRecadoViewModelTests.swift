@@ -1,5 +1,6 @@
 import XCTest
 import JKLarShared
+import UserNotifications
 @testable import JKLar
 
 /// Registrador simples de chamada (método + caminho) — usado tanto para o comportamento "modo
@@ -882,5 +883,253 @@ final class ComposeRecadoViewModelTests: XCTestCase {
 
         XCTAssertEqual(sut.errorMessage, JKCopy.muralComposeGenericPublishError)
         XCTAssertEqual(sut.selectedMentions.map(\.userID), mentions.map(\.userID), "a seleção de menção não se perde junto com o erro")
+    }
+
+    // MARK: Lembrete (plano 02-15, D-16)
+
+    /// O JSON cru do corpo gravado — os casos de edição precisam distinguir "as chaves
+    /// não vieram" de "as chaves vieram nulas", e comparar o tipo em Swift não prova o
+    /// contrato de rede, que é exatamente onde a distinção vive.
+    private func recordedBodyJSON(_ recorder: CallRecorder) async throws -> [String: Any] {
+        let body = await recorder.lastBody
+        let data = try XCTUnwrap(body)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    func testSetReminderStoresPairAndDoesNotChangeCanSubmit() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let sut = ComposeRecadoViewModel(apiClient: APIClient(transport: transport, baseURL: url()))
+        XCTAssertFalse(sut.canSubmit, "pré-condição: sem texto, envio desabilitado")
+        let eventAt = Date().addingTimeInterval(86_400)
+
+        sut.setReminder(eventAt: eventAt, remindOffsetSeconds: 3600)
+
+        XCTAssertEqual(
+            sut.selectedReminder,
+            ComposeRecadoViewModel.SelectedReminder(eventAt: eventAt, remindOffsetSeconds: 3600)
+        )
+        XCTAssertFalse(sut.canSubmit, "lembrete é sempre opcional — nunca habilita o envio sozinho")
+
+        sut.text = "Consulta"
+        XCTAssertTrue(sut.canSubmit)
+        sut.clearReminder()
+        XCTAssertTrue(sut.canSubmit, "e remover o lembrete também não desabilita")
+    }
+
+    func testClearReminderResetsToAbsentAndClearsInvalidHint() async {
+        let recorder = CallRecorder()
+        let transport = ComposeStubTransport(outcome: .success(makeRecado(), status: 201), recorder: recorder)
+        let sut = ComposeRecadoViewModel(mode: .new, apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Consulta"
+        // Combinação cujo disparo já passou — o envio revalida e preenche a dica.
+        sut.setReminder(eventAt: Date().addingTimeInterval(60), remindOffsetSeconds: 86_400)
+        await sut.submit { _ in }
+        XCTAssertNotNil(sut.reminderInvalidHint, "pré-condição: o envio bloqueado deixou a dica visível")
+
+        sut.clearReminder()
+
+        XCTAssertNil(sut.selectedReminder, "limpar devolve o estado a ausente")
+        XCTAssertNil(sut.reminderInvalidHint, "e limpa a dica de combinação inválida")
+    }
+
+    func testSubmitNewModeWithReminderSendsPairInCreateBody() async throws {
+        let recorder = CallRecorder()
+        let transport = ComposeStubTransport(outcome: .success(makeRecado(), status: 201), recorder: recorder)
+        let sut = ComposeRecadoViewModel(mode: .new, apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Consulta"
+        sut.setReminder(eventAt: Date().addingTimeInterval(86_400), remindOffsetSeconds: 900)
+
+        await sut.submit { _ in }
+
+        let json = try await recordedBodyJSON(recorder)
+        XCTAssertNotNil(json["eventAt"], "o par vai no corpo de criação")
+        XCTAssertFalse(json["eventAt"] is NSNull)
+        XCTAssertEqual(json["remindOffsetSeconds"] as? Int, 900)
+    }
+
+    func testSubmitWithReminderWhoseFireTimePassedWhileComposingIsBlockedWithoutNetworkCall() async {
+        let recorder = CallRecorder()
+        let transport = ComposeStubTransport(outcome: .success(makeRecado(), status: 201), recorder: recorder)
+        let sut = ComposeRecadoViewModel(mode: .new, apiClient: APIClient(transport: transport, baseURL: url()))
+        sut.text = "Consulta"
+        // Evento daqui a 1 min com antecedência de 1 dia: o disparo calculado já passou.
+        sut.setReminder(eventAt: Date().addingTimeInterval(60), remindOffsetSeconds: 86_400)
+
+        var completed = false
+        await sut.submit { _ in completed = true }
+
+        let callCount = await recorder.callCount
+        XCTAssertEqual(callCount, 0, "nenhuma chamada de rede acontece")
+        XCTAssertFalse(completed, "a tela continua aberta — o sucesso nunca dispara")
+        XCTAssertEqual(sut.reminderInvalidHint, JKCopy.muralComposeReminderInvalidHint, "a dica inline aparece")
+        XCTAssertNil(sut.errorMessage, "a dica é orientação sob a linha de lembrete, não o erro genérico do rodapé")
+    }
+
+    func testEditSaveWithUntouchedReminderSendsBodyWithoutReminderKeys() async throws {
+        let recorder = CallRecorder()
+        let transport = ComposeStubTransport(outcome: .success(makeRecado(), status: 200), recorder: recorder)
+        let sut = ComposeRecadoViewModel(
+            mode: .editing(recadoID: UUID()),
+            initialText: "Consulta",
+            initialReminder: .init(eventAt: Date().addingTimeInterval(86_400), remindOffsetSeconds: 900),
+            apiClient: APIClient(transport: transport, baseURL: url())
+        )
+        sut.text = "Consulta corrigida"
+
+        await sut.submit { _ in }
+
+        let json = try await recordedBodyJSON(recorder)
+        XCTAssertFalse(json.keys.contains("eventAt"), "sem mexer, o corpo não fala de lembrete — chave AUSENTE")
+        XCTAssertFalse(json.keys.contains("remindOffsetSeconds"))
+    }
+
+    func testEditSaveOfHistoricRecadoWithPastUntouchedReminderStillSucceeds() async {
+        let recorder = CallRecorder()
+        let saved = makeRecado(text: "Consulta do mês passado")
+        let transport = ComposeStubTransport(outcome: .success(saved, status: 200), recorder: recorder)
+        // O cenário exato da regra de edição do contrato: lembrete guardado JÁ VENCIDO,
+        // e a pessoa só corrige o texto, sem tocar no lembrete.
+        let sut = ComposeRecadoViewModel(
+            mode: .editing(recadoID: saved.id),
+            initialText: "Consulta do mês pasado",
+            initialReminder: .init(eventAt: Date().addingTimeInterval(-86_400), remindOffsetSeconds: 3600),
+            apiClient: APIClient(transport: transport, baseURL: url())
+        )
+        sut.text = "Consulta do mês passado"
+
+        var completed: RecadoDTO?
+        await sut.submit { completed = $0 }
+
+        XCTAssertEqual(completed?.id, saved.id, "recado antigo com lembrete vencido continua salvando")
+        XCTAssertNil(sut.reminderInvalidHint, "a revalidação só vale para lembrete mexido nesta sessão")
+        let callCount = await recorder.callCount
+        XCTAssertEqual(callCount, 1)
+    }
+
+    func testEditSaveAfterClearingReminderSendsExplicitNullPair() async throws {
+        let recorder = CallRecorder()
+        let transport = ComposeStubTransport(outcome: .success(makeRecado(), status: 200), recorder: recorder)
+        let sut = ComposeRecadoViewModel(
+            mode: .editing(recadoID: UUID()),
+            initialText: "Consulta",
+            initialReminder: .init(eventAt: Date().addingTimeInterval(86_400), remindOffsetSeconds: 900),
+            apiClient: APIClient(transport: transport, baseURL: url())
+        )
+
+        sut.clearReminder()
+        await sut.submit { _ in }
+
+        let json = try await recordedBodyJSON(recorder)
+        XCTAssertTrue(json.keys.contains("eventAt"), "depois de limpar, a chave VEM — presença explícita")
+        XCTAssertTrue(json["eventAt"] is NSNull, "— e vem nula (remover, nunca preservar)")
+        XCTAssertTrue(json.keys.contains("remindOffsetSeconds"))
+        XCTAssertTrue(json["remindOffsetSeconds"] is NSNull)
+    }
+
+    func testEditSaveAfterChangingDateSendsNewPairAndRevalidates() async throws {
+        let recorder = CallRecorder()
+        let transport = ComposeStubTransport(outcome: .success(makeRecado(), status: 200), recorder: recorder)
+        let sut = ComposeRecadoViewModel(
+            mode: .editing(recadoID: UUID()),
+            initialText: "Consulta",
+            initialReminder: .init(eventAt: Date().addingTimeInterval(-86_400), remindOffsetSeconds: 900),
+            apiClient: APIClient(transport: transport, baseURL: url())
+        )
+
+        // Primeiro: trocar para uma combinação que cairia no passado bloqueia o envio.
+        sut.setReminder(eventAt: Date().addingTimeInterval(60), remindOffsetSeconds: 86_400)
+        await sut.submit { _ in }
+        var callCount = await recorder.callCount
+        XCTAssertEqual(callCount, 0, "o par novo é revalidado antes de mandar")
+        XCTAssertEqual(sut.reminderInvalidHint, JKCopy.muralComposeReminderInvalidHint)
+
+        // Depois: um par novo válido vai no corpo com as duas chaves preenchidas.
+        let newEventAt = Date().addingTimeInterval(172_800)
+        sut.setReminder(eventAt: newEventAt, remindOffsetSeconds: 3600)
+        await sut.submit { _ in }
+
+        callCount = await recorder.callCount
+        XCTAssertEqual(callCount, 1)
+        let json = try await recordedBodyJSON(recorder)
+        XCTAssertNotNil(json["eventAt"])
+        XCTAssertFalse(json["eventAt"] is NSNull)
+        XCTAssertEqual(json["remindOffsetSeconds"] as? Int, 3600)
+    }
+
+    func testEditModeOpensWithStoredReminderPreFilledAndUntouched() {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+        let stored = ComposeRecadoViewModel.SelectedReminder(
+            eventAt: Date().addingTimeInterval(86_400), remindOffsetSeconds: 300
+        )
+        let sut = ComposeRecadoViewModel(
+            mode: .editing(recadoID: UUID()),
+            initialText: "Consulta",
+            initialReminder: stored,
+            apiClient: APIClient(transport: transport, baseURL: url())
+        )
+
+        XCTAssertEqual(sut.selectedReminder, stored, "o modo edição abre com o lembrete guardado já preenchido")
+        XCTAssertFalse(sut.reminderTouched, "e a marca de mexeu continua desligada — pré-carga não é mexer")
+    }
+
+    func testNotificationsDeniedFlagOnlySetWhenAuthorizationStatusIsDenied() async {
+        let transport = ComposeStubTransport(outcome: .failure(status: 500))
+
+        let deniedCenter = ComposeFakeNotificationCenter(status: .denied)
+        let deniedSut = ComposeRecadoViewModel(
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            notificationCenter: deniedCenter
+        )
+        await deniedSut.refreshNotificationAuthorizationState()
+        XCTAssertTrue(deniedSut.isNotificationsDenied, "negado sinaliza o aviso discreto")
+
+        let notDeterminedCenter = ComposeFakeNotificationCenter(status: .notDetermined)
+        let notDeterminedSut = ComposeRecadoViewModel(
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            notificationCenter: notDeterminedCenter
+        )
+        await notDeterminedSut.refreshNotificationAuthorizationState()
+        XCTAssertFalse(notDeterminedSut.isNotificationsDenied, "indeterminado não sinaliza nada, por contrato")
+
+        let authorizedCenter = ComposeFakeNotificationCenter(status: .authorized)
+        let authorizedSut = ComposeRecadoViewModel(
+            apiClient: APIClient(transport: transport, baseURL: url()),
+            notificationCenter: authorizedCenter
+        )
+        await authorizedSut.refreshNotificationAuthorizationState()
+        XCTAssertFalse(authorizedSut.isNotificationsDenied)
+    }
+}
+
+/// Centro de notificações falso mínimo deste arquivo — o compose só LÊ o estado de
+/// autorização (o aviso discreto); agendar/listar/remover nunca são chamados daqui e
+/// falham alto se forem.
+@MainActor
+private final class ComposeFakeNotificationCenter: LocalNotificationScheduling {
+    private let status: UNAuthorizationStatus
+
+    init(status: UNAuthorizationStatus) {
+        self.status = status
+    }
+
+    func scheduleRequest(_ request: UNNotificationRequest) async throws {
+        XCTFail("o compose nunca agenda — só o feed reconcilia")
+    }
+
+    func listPendingRequests() async -> [UNNotificationRequest] {
+        XCTFail("o compose nunca lista pendentes")
+        return []
+    }
+
+    func removePending(identifiers: [String]) {
+        XCTFail("o compose nunca remove pendentes")
+    }
+
+    func replaceCategories(_ categories: Set<UNNotificationCategory>) {
+        XCTFail("o compose nunca registra categorias")
+    }
+
+    func readAuthorizationStatus() async -> UNAuthorizationStatus {
+        status
     }
 }

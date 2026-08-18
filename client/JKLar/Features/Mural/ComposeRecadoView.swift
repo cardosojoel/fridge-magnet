@@ -30,6 +30,7 @@ struct ComposeRecadoView: View {
     @State private var photoPickerSelection: [PhotosPickerItem] = []
     @State private var isMentionPickerPresented = false
     @State private var isLocationSearchPresented = false
+    @State private var isReminderConfigPresented = false
     @Environment(\.dismiss) private var dismiss
 
     /// Chamado com o `RecadoDTO` criado/atualizado depois de um `submit()` bem-sucedido —
@@ -45,10 +46,12 @@ struct ComposeRecadoView: View {
         mode: ComposeRecadoViewModel.Mode,
         initialText: String = "",
         initialLocation: RecadoLocationDTO? = nil,
+        initialReminder: ComposeRecadoViewModel.SelectedReminder? = nil,
         onSuccess: @escaping (RecadoDTO) -> Void
     ) {
         _viewModel = State(initialValue: ComposeRecadoViewModel(
-            mode: mode, initialText: initialText, initialLocation: initialLocation
+            mode: mode, initialText: initialText, initialLocation: initialLocation,
+            initialReminder: initialReminder
         ))
         self.onSuccess = onSuccess
     }
@@ -109,6 +112,23 @@ struct ComposeRecadoView: View {
             LocationSearchView { resolved in
                 viewModel.setLocation(name: resolved.name, lat: resolved.lat, lng: resolved.lng)
             }
+        }
+        .sheet(isPresented: $isReminderConfigPresented) {
+            // Folha de configuração do lembrete (D-16, plano 02-15) — aninhada ao lado
+            // das duas acima (as três convivem; nenhuma vira a outra). Abre pré-preenchida
+            // quando já há lembrete escolhido; sem lembrete, os padrões de abertura do
+            // contrato moram na própria folha.
+            ReminderConfigView(
+                initialEventAt: viewModel.selectedReminder?.eventAt,
+                initialOffset: viewModel.selectedReminder.flatMap { ReminderOffset(rawValue: $0.remindOffsetSeconds) }
+            ) { eventAt, offset in
+                viewModel.setReminder(eventAt: eventAt, remindOffsetSeconds: offset.rawValue)
+            }
+        }
+        .task {
+            // Leitura do estado de autorizacao na entrada da tela — liga o aviso
+            // discreto SÓ quando negado neste aparelho (D-16).
+            await viewModel.refreshNotificationAuthorizationState()
         }
     }
 
@@ -388,6 +408,11 @@ struct ComposeRecadoView: View {
             // marcar alguém, na posição que o plano 02-13 reservou (02-UI-SPEC.md §
             // Addendum 2, D-13 corpo item 3, "Reserved extension point").
             locationSection
+
+            // Linha de lembrete (D-16, plano 02-15) — a ÚLTIMA do bloco, imediatamente
+            // depois da localização: a posição é contrato (menção → localização →
+            // lembrete), não preferência.
+            reminderSection
         }
     }
 
@@ -410,6 +435,47 @@ struct ComposeRecadoView: View {
                 isLocationSearchPresented = true
             } label: {
                 Label(JKCopy.muralComposeAddLocationCTA, systemImage: "mappin.and.ellipse")
+            }
+        }
+    }
+
+    // MARK: - Lembrete (plano 02-15, D-16)
+
+    /// Dois estados, espelhando exatamente a seção de localização acima: sem lembrete, um
+    /// botão com glifo de sino e a cópia de adicionar; com lembrete, o campo do design
+    /// system ligado às mutações do view-model, com o toque no resumo reabrindo a folha
+    /// pré-preenchida. Logo abaixo do campo, e só quando existirem: o aviso de
+    /// notificações desativadas e a dica de combinação inválida — os dois no papel de
+    /// rótulo em tom secundário, nunca no tratamento destrutivo (são informação e
+    /// orientação, não erro de publicação; o recado salva igual).
+    @ViewBuilder
+    private var reminderSection: some View {
+        VStack(alignment: .leading, spacing: JKSpacing.xs) {
+            if let reminder = viewModel.selectedReminder,
+               let offset = ReminderOffset(rawValue: reminder.remindOffsetSeconds) {
+                JKReminderField(
+                    summary: JKCopy.muralComposeReminderSummary(eventAt: reminder.eventAt, offset: offset),
+                    onTapSummary: { isReminderConfigPresented = true },
+                    onClear: { viewModel.clearReminder() }
+                )
+            } else {
+                Button {
+                    isReminderConfigPresented = true
+                } label: {
+                    Label(JKCopy.muralComposeAddReminderCTA, systemImage: "bell")
+                }
+            }
+
+            if viewModel.selectedReminder != nil, viewModel.isNotificationsDenied {
+                Text(JKCopy.muralComposeReminderNotificationsOffNotice)
+                    .font(JKTypography.label)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let hint = viewModel.reminderInvalidHint {
+                Text(hint)
+                    .font(JKTypography.label)
+                    .foregroundStyle(.secondary)
             }
         }
     }
