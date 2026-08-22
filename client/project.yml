@@ -113,6 +113,26 @@ targets:
         # registro (`APNSEnvironment` em `DeviceRegistrationRequest`) é decidido em código
         # por `#if DEBUG` (D-16 opção c), independente deste valor de assinatura.
         aps-environment: development
+        # BLOQUEADO POR CAPABILITY DE PORTAL — não descomentar antes de habilitar.
+        #
+        # `com.apple.developer.usernotifications.time-sensitive` é entitlement RESTRITO: só
+        # pode ser assinado se o App ID `com.jklar.app` tiver a capability "Time Sensitive
+        # Notifications" habilitada em developer.apple.com e o provisioning profile
+        # regenerado. Assinar sem isso NÃO dá erro de build — dá erro de LANÇAMENTO:
+        # "Application failed preflight checks" (reproduzido e isolado em 2026-08-19: com a
+        # linha ativa o app não abre nem no simulador; removendo-a, abre; nada mais mudou).
+        #
+        # O código já pede `.timeSensitive` (RecadoReminderScheduler.reminderInterruptionLevel,
+        # decisão do Joel 2026-08-19 — consulta médica da família): enquanto este entitlement
+        # não for autorizado, o SO rebaixa em silêncio para `.active` e o lembrete se comporta
+        # como antes (banner de ~5 s, suprimido pelo modo Foco). Isto é degradação graciosa,
+        # não quebra — por isso o código fica e o entitlement espera.
+        #
+        # PARA DESTRAVAR (ação do Joel, mesma visita ao portal da chave .p8):
+        #   developer.apple.com/account → Identifiers → com.jklar.app → marcar
+        #   "Time Sensitive Notifications" → Save. Depois: descomentar a linha abaixo,
+        #   `xcodegen generate`, rebuild. Ver WINDOWS.md item 15.
+        # com.apple.developer.usernotifications.time-sensitive: true
         # O cache de tokens do MSAL precisa de um keychain-access-group explícito — sem
         # isto o fluxo compila mas falha só em tempo de execução no macOS (plano 01-08).
         keychain-access-groups:

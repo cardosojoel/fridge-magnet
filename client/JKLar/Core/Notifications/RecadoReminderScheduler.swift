@@ -129,6 +129,19 @@ final class RecadoReminderScheduler {
     /// Identificador de uma ação de adiar — formato `RECADO_REMINDER_SNOOZE_{minutos}` do
     /// `02-UI-SPEC.md`. Montado por função para agendar (registro da categoria) e comparar
     /// (resposta recebida) nunca divergirem sobre a string.
+    /// Nível de interrupção de TODA notificação de lembrete — a original e a adiada, numa
+    /// constante só para as duas nunca divergirem (um adiamento de consulta médica não é
+    /// menos urgente que o aviso original).
+    ///
+    /// `.timeSensitive` (decisão do Joel, 2026-08-19): o banner persiste na tela em vez dos
+    /// ~5 s do nível `.active` e atravessa o modo Foco, que é o modo de falha real do uso
+    /// pretendido — compromisso de saúde perdido porque o aviso passou despercebido. Exige o
+    /// entitlement `com.apple.developer.usernotifications.time-sensitive` (client/project.yml):
+    /// sem ele o SO rebaixa para `.active` em silêncio, sem erro em tempo de compilação nem
+    /// de execução. O usuário mantém o controle final (Ajustes → Notificações → JK Lar →
+    /// Avisos urgentes), como manda a HIG.
+    static let reminderInterruptionLevel: UNNotificationInterruptionLevel = .timeSensitive
+
     static func snoozeActionIdentifier(minutes: Int) -> String {
         "RECADO_REMINDER_SNOOZE_\(minutes)"
     }
@@ -317,6 +330,7 @@ final class RecadoReminderScheduler {
         )
         content.sound = .default
         content.categoryIdentifier = Self.categoryIdentifier
+        content.interruptionLevel = Self.reminderInterruptionLevel
         content.userInfo = [
             Self.userInfoRecadoIDKey: recadoID,
             Self.userInfoEventAtKey: eventAtSeconds,
@@ -373,6 +387,7 @@ final class RecadoReminderScheduler {
         content.body = JKCopy.muralReminderNotificationBody(eventAt: eventAt, offset: offset)
         content.sound = .default
         content.categoryIdentifier = Self.categoryIdentifier
+        content.interruptionLevel = Self.reminderInterruptionLevel
         content.userInfo = [
             Self.userInfoRecadoIDKey: recado.id.uuidString,
             Self.userInfoEventAtKey: eventAt.timeIntervalSince1970,

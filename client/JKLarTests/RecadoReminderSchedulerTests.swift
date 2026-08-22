@@ -447,4 +447,49 @@ final class RecadoReminderSchedulerTests: XCTestCase {
             XCTAssertFalse(action.options.contains(.foreground), "todas em segundo plano — nenhuma abre o app")
         }
     }
+
+    // MARK: Nível de interrupção (Time Sensitive, decisão do Joel 2026-08-19)
+
+    /// O lembrete original precisa nascer `.timeSensitive`: no nível padrão (`.active`) o
+    /// banner dura ~5 s e o modo Foco o suprime — o modo de falha real do uso pretendido
+    /// (compromisso de saúde perdido porque o aviso passou despercebido).
+    func testScheduledReminderCarriesTimeSensitiveInterruptionLevel() async {
+        let center = FakeNotificationCenter()
+        let sut = makeScheduler(center: center)
+        let recado = makeRecado(eventAt: now.addingTimeInterval(3600), remindOffsetSeconds: 900)
+
+        await sut.reconcile([recado], now: now)
+
+        XCTAssertEqual(center.scheduledRequests.count, 1)
+        XCTAssertEqual(center.scheduledRequests[0].content.interruptionLevel, .timeSensitive)
+    }
+
+    /// O lembrete ADIADO carrega o mesmo nível — um adiamento de consulta médica não é menos
+    /// urgente que o aviso original, e a constante única existe para os dois nunca divergirem.
+    func testSnoozedReminderCarriesTimeSensitiveInterruptionLevel() async {
+        let center = FakeNotificationCenter()
+        let sut = makeScheduler(center: center)
+        let recadoID = UUID()
+        let eventAt = now.addingTimeInterval(3600)
+
+        await sut.handleActionResponse(
+            actionIdentifier: RecadoReminderScheduler.snoozeActionIdentifier(minutes: 10),
+            requestIdentifier: RecadoReminderScheduler.requestIdentifier(for: recadoID),
+            title: "Consulta",
+            recadoID: recadoID.uuidString,
+            eventAtSeconds: eventAt.timeIntervalSince1970
+        )
+
+        XCTAssertEqual(center.scheduledRequests.count, 1)
+        XCTAssertEqual(center.scheduledRequests[0].content.interruptionLevel, .timeSensitive)
+    }
+
+    // NOTA (2026-08-19): não há teste automatizado do entitlement
+    // `com.apple.developer.usernotifications.time-sensitive` porque ele está BLOQUEADO por
+    // capability de portal (ver o bloco comentado em client/project.yml). Um teste que
+    // assertasse a presença dele falharia de propósito enquanto a capability não existe, e um
+    // que assertasse a ausência viraria lixo no dia em que ela existir. Os dois casos acima
+    // cobrem o que é de fato do app — o nível pedido nos dois caminhos de conteúdo; a
+    // persistência do banner e a travessia do modo Foco só são observáveis a olho nu
+    // (WINDOWS.md item 15).
 }
