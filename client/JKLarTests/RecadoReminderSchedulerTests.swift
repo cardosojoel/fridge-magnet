@@ -484,12 +484,12 @@ final class RecadoReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(center.scheduledRequests[0].content.interruptionLevel, .timeSensitive)
     }
 
-    // NOTA (2026-08-19): não há teste automatizado do entitlement
-    // `com.apple.developer.usernotifications.time-sensitive` porque ele está BLOQUEADO por
-    // capability de portal (ver o bloco comentado em client/project.yml). Um teste que
-    // assertasse a presença dele falharia de propósito enquanto a capability não existe, e um
-    // que assertasse a ausência viraria lixo no dia em que ela existir. Os dois casos acima
-    // cobrem o que é de fato do app — o nível pedido nos dois caminhos de conteúdo; a
-    // persistência do banner e a travessia do modo Foco só são observáveis a olho nu
-    // (WINDOWS.md item 15).
+    // NOTA: o entitlement `com.apple.developer.usernotifications.time-sensitive`
+    // (client/project.yml) é a outra metade deste recurso — sem ele o SO rebaixa `.timeSensitive`
+    // para `.active` em silêncio. Não há caso automatizado para ele de propósito: o entitlement
+    // só é assinável com a capability habilitada no App ID e, quando ela falta, o sintoma não é
+    // um teste vermelho — é o app inteiro não lançar, o que a suíte acusa de forma muito mais
+    // barulhenta que uma asserção. Os dois casos acima cobrem o que é do app (o nível pedido nos
+    // dois caminhos de conteúdo); persistência do banner e travessia do modo Foco só são
+    // observáveis a olho nu (WINDOWS.md item 15).
 }
