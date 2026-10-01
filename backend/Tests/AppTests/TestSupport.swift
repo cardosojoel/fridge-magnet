@@ -62,18 +62,27 @@ enum TestSupport {
         try! _RSA.Signing.PrivateKey(keySize: .bits2048)
     }()
 
+    /// Senha de um papel do Postgres local, lida do ambiente e nunca versionada. É a mesma
+    /// que `scripts/dev-db.sh` usou ao criar os papéis `jklar_app` e `jklar_owner`.
+    static func dbPassword(_ variable: String) -> String {
+        guard let value = ProcessInfo.processInfo.environment[variable], !value.isEmpty else {
+            fatalError("\(variable) não definida — exporte a mesma senha usada em scripts/dev-db.sh")
+        }
+        return value
+    }
+
     /// Sobe uma `Application` de teste completa: registra o `Client` falso de JWKS, roda
     /// `configure(_:)` (bancos, migrations, chave JWT efêmera, provedores, rotas) e limpa
     /// as tabelas de identidade para isolar este teste dos anteriores.
     static func makeApp() async throws -> Application {
         setenv(
             "DATABASE_URL",
-            "postgres://jklar_app:REMOVIDO@127.0.0.1:5432/jklar_test?sslmode=disable",
+            "postgres://jklar_app:\(dbPassword("JKLAR_APP_PASSWORD"))@127.0.0.1:5432/jklar_test?sslmode=disable",
             1
         )
         setenv(
             "DATABASE_OWNER_URL",
-            "postgres://jklar_owner:REMOVIDO@127.0.0.1:5432/jklar_test?sslmode=disable",
+            "postgres://jklar_owner:\(dbPassword("JKLAR_OWNER_PASSWORD"))@127.0.0.1:5432/jklar_test?sslmode=disable",
             1
         )
         setenv("APPLE_AUDIENCE", testAppleAudience, 1)
@@ -234,7 +243,7 @@ enum TestSupport {
         userID: UUID? = nil,
         _ body: @escaping @Sendable (any SQLDatabase) async throws -> T
     ) async throws -> T {
-        let appPassword = ProcessInfo.processInfo.environment["JKLAR_APP_PASSWORD"] ?? "REMOVIDO"
+        let appPassword = dbPassword("JKLAR_APP_PASSWORD")
         let dsn = "postgres://jklar_app:\(appPassword)@127.0.0.1:5432/jklar_test?sslmode=disable"
         app.databases.use(try .postgres(url: dsn), as: .appRoleTestConnection)
 

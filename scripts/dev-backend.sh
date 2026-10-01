@@ -36,8 +36,9 @@ if [ "${#missing_r2_vars[@]}" -gt 0 ]; then
   exit 1
 fi
 
-APP_PASSWORD="${JKLAR_APP_PASSWORD:-REMOVIDO}"
-OWNER_PASSWORD="${JKLAR_OWNER_PASSWORD:-REMOVIDO}"
+# Senhas dos papéis locais: vêm do ambiente e nunca ficam no repositório.
+APP_PASSWORD="${JKLAR_APP_PASSWORD:?defina JKLAR_APP_PASSWORD (senha local do papel jklar_app)}"
+OWNER_PASSWORD="${JKLAR_OWNER_PASSWORD:?defina JKLAR_OWNER_PASSWORD (senha local do papel jklar_owner)}"
 
 export DATABASE_URL="postgres://jklar_app:${APP_PASSWORD}@127.0.0.1:5432/jklar_dev?sslmode=disable"
 export DATABASE_OWNER_URL="postgres://jklar_owner:${OWNER_PASSWORD}@127.0.0.1:5432/jklar_dev?sslmode=disable"

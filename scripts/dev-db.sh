@@ -18,8 +18,9 @@ set -euo pipefail
 PG_BIN="/opt/homebrew/opt/postgresql@17/bin"
 export PATH="${PG_BIN}:${PATH}"
 
-APP_PASSWORD="${JKLAR_APP_PASSWORD:-REMOVIDO}"
-OWNER_PASSWORD="${JKLAR_OWNER_PASSWORD:-REMOVIDO}"
+# Senhas dos papéis locais: vêm do ambiente e nunca ficam no repositório.
+APP_PASSWORD="${JKLAR_APP_PASSWORD:?defina JKLAR_APP_PASSWORD (senha local do papel jklar_app)}"
+OWNER_PASSWORD="${JKLAR_OWNER_PASSWORD:?defina JKLAR_OWNER_PASSWORD (senha local do papel jklar_owner)}"
 
 echo "==> Verificando postgresql@17 (Homebrew)..."
 if ! brew list --formula 2>/dev/null | grep -q '^postgresql@17$'; then

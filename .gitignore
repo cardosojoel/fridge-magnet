@@ -22,3 +22,25 @@ client/Local.xcconfig
 client/JKLar.xcodeproj/
 client/JKLar/Info.plist
 client/JKLar/JKLar.entitlements
+
+# Planejamento e instruções locais de agente — ficam na máquina, fora do repositório
+.planning/
+.claude/CLAUDE.md
+.claude/settings.local.json
+
+# Segredos — qualquer variante de env, certificados e perfis de provisionamento da
+# Apple, configuração do Firebase/Google
+.env*
+!.env.example
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.key
+GoogleService-Info.plist
+
+# Xcode e SwiftPM — dados por usuário e artefatos locais
+xcuserdata/
+DerivedData/
+.swiftpm/
+*.xcresult
