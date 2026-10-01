@@ -1,7 +1,7 @@
 @testable import App
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Plano 01-08 Task 2 — regra de unificação de conta por e-mail verificado (IDENT-02,

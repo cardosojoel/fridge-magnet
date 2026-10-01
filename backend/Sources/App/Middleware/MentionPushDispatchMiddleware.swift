@@ -1,7 +1,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import Vapor
 
 /// Um push de @menção enfileirado pelo handler (`RecadoController.enqueueMentionPushes`),

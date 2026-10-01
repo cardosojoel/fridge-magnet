@@ -1,7 +1,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import Vapor
 
 /// Sinaliza que algum id em `mentionedUserIDs` não pertence à casa do requisitante — o

@@ -2,9 +2,9 @@
 #
 # scripts/dev-backend.sh — sobe o backend Vapor completo em desenvolvimento local.
 #
-# Pressupõe que `scripts/dev-db.sh` já rodou (papéis jklar_owner/jklar_app e o banco
-# jklar_dev existem). Roda as migrations com o DSN **owner** (`swift run App migrate --yes`)
-# e depois serve com o DSN de **runtime** (`swift run App serve`, papel `jklar_app`) — dois
+# Pressupõe que `scripts/dev-db.sh` já rodou (papéis fridgemagnet_owner/fridgemagnet_app e o banco
+# fridgemagnet_dev existem). Roda as migrations com o DSN **owner** (`swift run App migrate --yes`)
+# e depois serve com o DSN de **runtime** (`swift run App serve`, papel `fridgemagnet_app`) — dois
 # comandos, é o que fecha a promessa de "a stack inteira sobe com dois comandos"
 # (`scripts/dev-db.sh` + este script).
 #
@@ -37,11 +37,11 @@ if [ "${#missing_r2_vars[@]}" -gt 0 ]; then
 fi
 
 # Senhas dos papéis locais: vêm do ambiente e nunca ficam no repositório.
-APP_PASSWORD="${JKLAR_APP_PASSWORD:?defina JKLAR_APP_PASSWORD (senha local do papel jklar_app)}"
-OWNER_PASSWORD="${JKLAR_OWNER_PASSWORD:?defina JKLAR_OWNER_PASSWORD (senha local do papel jklar_owner)}"
+APP_PASSWORD="${FRIDGEMAGNET_APP_PASSWORD:?defina FRIDGEMAGNET_APP_PASSWORD (senha local do papel fridgemagnet_app)}"
+OWNER_PASSWORD="${FRIDGEMAGNET_OWNER_PASSWORD:?defina FRIDGEMAGNET_OWNER_PASSWORD (senha local do papel fridgemagnet_owner)}"
 
-export DATABASE_URL="postgres://jklar_app:${APP_PASSWORD}@127.0.0.1:5432/jklar_dev?sslmode=disable"
-export DATABASE_OWNER_URL="postgres://jklar_owner:${OWNER_PASSWORD}@127.0.0.1:5432/jklar_dev?sslmode=disable"
+export DATABASE_URL="postgres://fridgemagnet_app:${APP_PASSWORD}@127.0.0.1:5432/fridgemagnet_dev?sslmode=disable"
+export DATABASE_OWNER_URL="postgres://fridgemagnet_owner:${OWNER_PASSWORD}@127.0.0.1:5432/fridgemagnet_dev?sslmode=disable"
 
 # Chave de assinatura JWT ES256 do backend (D-09) — nunca versionada (.gitignore: *.pem
 # fica de fora indiretamente via a convenção .env/*.p8; este arquivo específico soma-se a

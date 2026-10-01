@@ -2,7 +2,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Corretude da paginação por cursor do feed (MURAL-05) — 02-RESEARCH.md Pitfall 2: uma

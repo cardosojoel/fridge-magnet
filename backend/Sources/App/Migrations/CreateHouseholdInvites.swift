@@ -6,8 +6,8 @@ import FluentSQL
 /// irmã `invite_exists` que só existe para distinguir "código inexistente" de "código
 /// expirado" sem abrir um caminho de leitura mais amplo do que esse.
 ///
-/// Roda no database **owner** (`jklar_owner`, ver `configure.swift`) — o papel de runtime
-/// `jklar_app` só recebe os `GRANT`s explícitos no fim desta migration, nunca DDL.
+/// Roda no database **owner** (`fridgemagnet_owner`, ver `configure.swift`) — o papel de runtime
+/// `fridgemagnet_app` só recebe os `GRANT`s explícitos no fim desta migration, nunca DDL.
 struct CreateHouseholdInvites: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("household_invites")
@@ -33,8 +33,8 @@ struct CreateHouseholdInvites: AsyncMigration {
         // (`CreateHouseholdSchema`): ENABLE **sem** FORCE. Quem aceita um convite ainda não
         // tem `app.current_household_id` nenhum — precisa de um caminho que resolva o
         // código sem que a policy o cegue. Esse caminho é `resolve_invite`, `SECURITY
-        // DEFINER`: como a tabela ficou sem FORCE, o dono (`jklar_owner`, quem a função roda
-        // como) fica isento da policy por padrão do Postgres. `jklar_app` continua submetido
+        // DEFINER`: como a tabela ficou sem FORCE, o dono (`fridgemagnet_owner`, quem a função roda
+        // como) fica isento da policy por padrão do Postgres. `fridgemagnet_app` continua submetido
         // à policy em qualquer consulta direta — só recebe `GRANT EXECUTE` das duas funções
         // abaixo, nunca `SELECT` direto na tabela sem contexto (T-06-05, T-06-09).
         try await sql.raw("ALTER TABLE household_invites ENABLE ROW LEVEL SECURITY").run()
@@ -71,12 +71,12 @@ struct CreateHouseholdInvites: AsyncMigration {
             $$
             """).run()
 
-        // jklar_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS). UPDATE fica
+        // fridgemagnet_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS). UPDATE fica
         // concedido de antemão para a rota de revogação (fora do escopo desta fatia) não
         // exigir outra migration — continua RLS-scoped como qualquer outro UPDATE.
-        try await sql.raw("GRANT SELECT, INSERT, UPDATE ON household_invites TO jklar_app").run()
-        try await sql.raw("GRANT EXECUTE ON FUNCTION resolve_invite(text) TO jklar_app").run()
-        try await sql.raw("GRANT EXECUTE ON FUNCTION invite_exists(text) TO jklar_app").run()
+        try await sql.raw("GRANT SELECT, INSERT, UPDATE ON household_invites TO fridgemagnet_app").run()
+        try await sql.raw("GRANT EXECUTE ON FUNCTION resolve_invite(text) TO fridgemagnet_app").run()
+        try await sql.raw("GRANT EXECUTE ON FUNCTION invite_exists(text) TO fridgemagnet_app").run()
     }
 
     func revert(on database: Database) async throws {

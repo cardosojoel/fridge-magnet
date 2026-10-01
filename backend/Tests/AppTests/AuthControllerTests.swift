@@ -1,7 +1,7 @@
 @testable import App
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Corpo de `/health`, replicado aqui porque `HealthResponse` é `private` em

@@ -2,11 +2,11 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Prova de isolamento entre casas (IDENT-05) contra Postgres real — a conexão de teste é
-/// `jklar_app`, o mesmo papel de runtime do backend (NOBYPASSRLS), nunca `jklar_owner`.
+/// `fridgemagnet_app`, o mesmo papel de runtime do backend (NOBYPASSRLS), nunca `fridgemagnet_owner`.
 final class RLSIsolationTests: XCTestCase {
     private struct CreatedHousehold {
         var userID: UUID
@@ -47,7 +47,7 @@ final class RLSIsolationTests: XCTestCase {
             let houseA = try await createHousehold(app: app, name: "Casa A")
             let houseB = try await createHousehold(app: app, name: "Casa B")
 
-            // A conexão de teste está autenticada como jklar_app, não jklar_owner — se
+            // A conexão de teste está autenticada como fridgemagnet_app, não fridgemagnet_owner — se
             // rodasse como dono, as policies seriam ignoradas e toda asserção abaixo
             // "passaria" sem provar isolamento nenhum.
             try await TestSupport.withAppRoleConnection(app: app, householdID: houseA.householdID) { sql in
@@ -56,8 +56,8 @@ final class RLSIsolationTests: XCTestCase {
                 }
                 let currentUser = try row.decode(column: "current_user", as: String.self)
                 XCTAssertEqual(
-                    currentUser, "jklar_app",
-                    "a conexão de teste precisa estar sujeita à RLS (jklar_app), não bypassá-la (jklar_owner)"
+                    currentUser, "fridgemagnet_app",
+                    "a conexão de teste precisa estar sujeita à RLS (fridgemagnet_app), não bypassá-la (fridgemagnet_owner)"
                 )
             }
 

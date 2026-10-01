@@ -2,7 +2,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Prova o fan-out de push por @menção do plano 02-02 (MURAL-03), incluindo o caso

@@ -1,7 +1,7 @@
 @testable import App
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Cobre os oito casos de `<behavior>` da Task 2 do plano 01-06 — papel resolvido sempre do

@@ -1,7 +1,7 @@
 import APNS
 import APNSCore
 import Fluent
-import JKLarShared
+import FridgeMagnetShared
 import Vapor
 import VaporAPNS
 
@@ -11,7 +11,7 @@ import VaporAPNS
 protocol PushClient: Sendable {
     func sendAlertNotification(
         deviceToken: String,
-        environment: JKLarShared.APNSEnvironment,
+        environment: FridgeMagnetShared.APNSEnvironment,
         title: String,
         body: String
     ) async throws
@@ -32,7 +32,7 @@ struct VaporAPNSPushClient: PushClient {
 
     func sendAlertNotification(
         deviceToken: String,
-        environment: JKLarShared.APNSEnvironment,
+        environment: FridgeMagnetShared.APNSEnvironment,
         title: String,
         body: String
     ) async throws {
@@ -60,7 +60,7 @@ struct VaporAPNSPushClient: PushClient {
 struct NoopPushClient: PushClient {
     func sendAlertNotification(
         deviceToken: String,
-        environment: JKLarShared.APNSEnvironment,
+        environment: FridgeMagnetShared.APNSEnvironment,
         title: String,
         body: String
     ) async throws {}
@@ -78,7 +78,7 @@ struct PushService: Sendable {
     let client: any PushClient
 
     func send(to token: DeviceToken, title: String, body: String, on database: any Database) async throws {
-        let declaredEnvironment = JKLarShared.APNSEnvironment(rawValue: token.environment) ?? .production
+        let declaredEnvironment = FridgeMagnetShared.APNSEnvironment(rawValue: token.environment) ?? .production
         do {
             try await client.sendAlertNotification(
                 deviceToken: token.apnsToken,
@@ -87,7 +87,7 @@ struct PushService: Sendable {
                 body: body
             )
         } catch is BadDeviceTokenError {
-            let corrected: JKLarShared.APNSEnvironment = declaredEnvironment == .production ? .sandbox : .production
+            let corrected: FridgeMagnetShared.APNSEnvironment = declaredEnvironment == .production ? .sandbox : .production
             token.environment = corrected.rawValue
             try await token.save(on: database)
             try await client.sendAlertNotification(

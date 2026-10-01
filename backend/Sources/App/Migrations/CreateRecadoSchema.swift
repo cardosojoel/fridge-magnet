@@ -13,8 +13,8 @@ import FluentSQL
 /// conhecer a própria casa" que motivou aquela cláusula extra em `household_members`/
 /// `device_tokens` (02-RESEARCH.md Pattern 1).
 ///
-/// Roda no database **owner** (`jklar_owner`, ver `configure.swift`) — o papel de runtime
-/// `jklar_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
+/// Roda no database **owner** (`fridgemagnet_owner`, ver `configure.swift`) — o papel de runtime
+/// `fridgemagnet_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
 struct CreateRecadoSchema: AsyncMigration {
     func prepare(on database: Database) async throws {
         // Ordem de criação por causa das FKs: recados primeiro (referenciada por todas as
@@ -98,7 +98,7 @@ struct CreateRecadoSchema: AsyncMigration {
             "ALTER TABLE recados ALTER COLUMN sequence SET DEFAULT nextval('recados_sequence_seq')"
         ).run()
         try await sql.raw("ALTER SEQUENCE recados_sequence_seq OWNED BY recados.sequence").run()
-        try await sql.raw("GRANT USAGE, SELECT ON SEQUENCE recados_sequence_seq TO jklar_app").run()
+        try await sql.raw("GRANT USAGE, SELECT ON SEQUENCE recados_sequence_seq TO fridgemagnet_app").run()
         try await sql.raw("ALTER TABLE recados ADD CONSTRAINT recados_sequence_unique UNIQUE (sequence)").run()
 
         // Exatamente um pai por menção (recado OU comentário, nunca os dois, nunca
@@ -150,7 +150,7 @@ struct CreateRecadoSchema: AsyncMigration {
                 USING (household_id = NULLIF(current_setting('app.current_household_id', true), '')::uuid)
                 """).run()
             try await sql.raw(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON \(unsafeRaw: table) TO jklar_app"
+                "GRANT SELECT, INSERT, UPDATE, DELETE ON \(unsafeRaw: table) TO fridgemagnet_app"
             ).run()
         }
     }

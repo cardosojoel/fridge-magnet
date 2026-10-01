@@ -1,7 +1,7 @@
 import Fluent
 import Foundation
 
-/// Uma "casa" do JK Lar — o raiz do tenant. Toda tabela de domínio das Fases 2 a 10 escopa
+/// Uma "casa" do FridgeMagnet — o raiz do tenant. Toda tabela de domínio das Fases 2 a 10 escopa
 /// por `household_id`; esta é a tabela que esse `household_id` referencia.
 final class Household: Model, @unchecked Sendable {
     static let schema = "households"

@@ -1,7 +1,7 @@
 // swift-tools-version:6.0
 import PackageDescription
 
-// Backend Vapor do JK Lar. Todas as dependências abaixo constam como "OK / Approved" na
+// Backend Vapor do FridgeMagnet. Todas as dependências abaixo constam como "OK / Approved" na
 // tabela "Package Legitimacy Audit" de 01-RESEARCH.md (orgs oficiais vapor/vapor,
 // vapor/fluent, vapor/fluent-postgres-driver, vapor/jwt, vapor/apns) — nenhum checkpoint de
 // legitimidade exigido. Versões pinadas em `from:` na tag major corrente verificada nas
@@ -51,7 +51,7 @@ let package = Package(
                 .product(name: "APNSCore", package: "apnswift"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "SotoS3", package: "soto"),
-                .product(name: "JKLarShared", package: "Shared"),
+                .product(name: "FridgeMagnetShared", package: "Shared"),
             ],
             swiftSettings: swiftSettings
         ),

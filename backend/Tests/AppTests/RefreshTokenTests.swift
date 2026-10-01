@@ -2,7 +2,7 @@
 import Crypto
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Cobertura de `SessionService`/`AuthController.refresh`/`AuthController.logout` — plano

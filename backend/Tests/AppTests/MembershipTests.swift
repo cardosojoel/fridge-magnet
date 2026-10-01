@@ -1,7 +1,7 @@
 @testable import App
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Cobre os nove casos de `<behavior>` da Task 1 do plano 01-10 — remoção admin-only

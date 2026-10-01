@@ -2,12 +2,12 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Prova de isolamento entre casas nas cinco tabelas do mural (T-02-01) contra Postgres
-/// real — a conexão de teste é `jklar_app`, o mesmo papel de runtime do backend
-/// (NOBYPASSRLS), nunca `jklar_owner`. Segue `RLSIsolationTests.swift` linha a linha.
+/// real — a conexão de teste é `fridgemagnet_app`, o mesmo papel de runtime do backend
+/// (NOBYPASSRLS), nunca `fridgemagnet_owner`. Segue `RLSIsolationTests.swift` linha a linha.
 final class RecadoRLSIsolationTests: XCTestCase {
     private struct SeededHouse {
         var householdID: UUID
@@ -52,7 +52,7 @@ final class RecadoRLSIsolationTests: XCTestCase {
         )
         let householdID = try XCTUnwrap(capturedHouseholdID)
 
-        // `jklar_owner` não tem `BYPASSRLS` (dev-db.sh) — sob `FORCE ROW LEVEL SECURITY`
+        // `fridgemagnet_owner` não tem `BYPASSRLS` (dev-db.sh) — sob `FORCE ROW LEVEL SECURITY`
         // nem o dono da tabela escapa da policy, então o próprio INSERT do seed precisa do
         // mesmo `app.current_household_id` que a produção aplica, dentro da mesma
         // transação (mesma função usada por `HouseholdContextMiddleware`/`configure.swift`,
@@ -109,8 +109,8 @@ final class RecadoRLSIsolationTests: XCTestCase {
                 }
                 let currentUser = try row.decode(column: "current_user", as: String.self)
                 XCTAssertEqual(
-                    currentUser, "jklar_app",
-                    "a conexão de teste precisa estar sujeita à RLS (jklar_app), não bypassá-la (jklar_owner)"
+                    currentUser, "fridgemagnet_app",
+                    "a conexão de teste precisa estar sujeita à RLS (fridgemagnet_app), não bypassá-la (fridgemagnet_owner)"
                 )
             }
         }

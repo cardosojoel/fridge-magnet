@@ -1,4 +1,4 @@
-name: JKLar
+name: FridgeMagnet
 options:
   deploymentTarget:
     iOS: "18.0"
@@ -14,16 +14,16 @@ configFiles:
 settings:
   base:
     DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
-    PRODUCT_BUNDLE_IDENTIFIER: com.jklar.app
+    PRODUCT_BUNDLE_IDENTIFIER: com.fridgemagnet.app
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
 packages:
   # Pacote SPM local — contrato de DTOs compartilhado com o backend (plano 01-01, ver
-  # Shared/Package.swift). O cliente importa `JKLarShared` para falar exatamente a mesma
+  # Shared/Package.swift). O cliente importa `FridgeMagnetShared` para falar exatamente a mesma
   # forma de request/response que `AuthController`/`HouseholdController` esperam, sem
   # duplicar `SessionRequest`/`SessionResponse`/`HouseholdDTO` como structs locais.
-  JKLarShared:
+  FridgeMagnetShared:
     path: ../Shared
   # Login com Google (plano 01-08). Tag 9.2.0 verificada em
   # github.com/google/GoogleSignIn-iOS/releases em 2026-08-16 — pinar ≥7.1.0 não é
@@ -40,18 +40,18 @@ packages:
     url: https://github.com/AzureAD/microsoft-authentication-library-for-objc
     from: "2.14.1"
 targets:
-  JKLar:
+  FridgeMagnet:
     type: application
     supportedDestinations: [iOS, macOS]
     sources:
-      - path: JKLar
+      - path: FridgeMagnet
     dependencies:
-      - package: JKLarShared
+      - package: FridgeMagnetShared
       - package: GoogleSignIn
         product: GoogleSignIn
       - package: MSAL
     info:
-      path: JKLar/Info.plist
+      path: FridgeMagnet/Info.plist
       properties:
         UILaunchScreen: {}
         NSAppTransportSecurity:
@@ -62,22 +62,22 @@ targets:
         UIBackgroundModes:
           - remote-notification
         CFBundleURLTypes:
-          - CFBundleURLName: com.jklar.app
+          - CFBundleURLName: com.fridgemagnet.app
             CFBundleURLSchemes:
-              - jklar
+              - fridgemagnet
           # Esquema de retorno do fluxo de browser do GIDSignIn — o "reversed client ID"
           # que o Google gera junto do OAuth client ID (visível na mesma tela do console
           # que mostra o GOOGLE_CLIENT_ID). Não é uma transformação textual simples do
           # client ID (não é literalmente a string invertida) — por isso é uma segunda
           # variável de ambiente, não derivada de GOOGLE_CLIENT_ID em build time.
-          - CFBundleURLName: com.jklar.app.google
+          - CFBundleURLName: com.fridgemagnet.app.google
             CFBundleURLSchemes:
               - $(GOOGLE_REVERSED_CLIENT_ID)
           # Esquema de retorno do fluxo MSAL (D-01/D-03 da task): sempre
           # msauth.<bundle-id> para o formato de redirect URI que a Microsoft espera.
-          - CFBundleURLName: com.jklar.app.msal
+          - CFBundleURLName: com.fridgemagnet.app.msal
             CFBundleURLSchemes:
-              - msauth.com.jklar.app
+              - msauth.com.fridgemagnet.app
         # MSAL precisa poder checar se os apps oficiais da Microsoft (Authenticator/Company
         # Portal) estão instalados para oferecer broker SSO — sem isto no
         # LSApplicationQueriesSchemes, canOpenURL sempre devolve false silenciosamente.
@@ -96,9 +96,9 @@ targets:
         # Único outro conhecimento do cliente sobre o backend além do 127.0.0.1 de DEBUG em
         # APIConfiguration.swift (regra zero-trust do CLAUDE.md) — placeholder até a Fase 10
         # decidir o hosting real (Fly.io/Railway, STACK.md); não é lido em builds DEBUG.
-        JKLarAPIBaseURL: "https://api.jklar.app"
+        FridgeMagnetAPIBaseURL: "https://api.fridgemagnet.app"
     entitlements:
-      path: JKLar/JKLar.entitlements
+      path: FridgeMagnet/FridgeMagnet.entitlements
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
@@ -109,7 +109,7 @@ targets:
         # `didRegisterForRemoteNotificationsWithDeviceToken`. `development` cobre os builds
         # de Debug locais desta fatia; a variante `production` (TestFlight/App Store) fica
         # para a Fase 10 (hosting real, mesmo adiamento já documentado em
-        # `JKLarAPIBaseURL`/APIConfiguration.swift). O ambiente enviado ao backend em cada
+        # `FridgeMagnetAPIBaseURL`/APIConfiguration.swift). O ambiente enviado ao backend em cada
         # registro (`APNSEnvironment` em `DeviceRegistrationRequest`) é decidido em código
         # por `#if DEBUG` (D-16 opção c), independente deste valor de assinatura.
         aps-environment: development
@@ -117,7 +117,7 @@ targets:
         # saúde da família — banner de ~5 s suprimido pelo modo Foco é falha funcional).
         #
         # Entitlement RESTRITO: só pode ser assinado com a capability "Time Sensitive
-        # Notifications" habilitada no App ID `com.jklar.app`. Sem ela NÃO há erro de build —
+        # Notifications" habilitada no App ID `com.fridgemagnet.app`. Sem ela NÃO há erro de build —
         # há erro de LANÇAMENTO ("Application failed preflight checks"), reproduzido e isolado
         # em 2026-08-19. Capability habilitada pelo Joel em 2026-08-22 e o lançamento
         # revalidado no simulador na mesma data. Se este entitlement voltar a derrubar o
@@ -127,26 +127,26 @@ targets:
         # O cache de tokens do MSAL precisa de um keychain-access-group explícito — sem
         # isto o fluxo compila mas falha só em tempo de execução no macOS (plano 01-08).
         keychain-access-groups:
-          - $(AppIdentifierPrefix)com.jklar.app
+          - $(AppIdentifierPrefix)com.fridgemagnet.app
     scheme:
       testTargets:
-        - JKLarTests
-  JKLarTests:
+        - FridgeMagnetTests
+  FridgeMagnetTests:
     type: bundle.unit-test
     supportedDestinations: [iOS, macOS]
     sources:
-      - path: JKLarTests
+      - path: FridgeMagnetTests
     dependencies:
-      - target: JKLar
-      - package: JKLarShared
+      - target: FridgeMagnet
+      - package: FridgeMagnetShared
     settings:
       base:
         # XcodeGen infere TEST_HOST/BUNDLE_LOADER automaticamente a partir da dependência
         # no target de app, mas usa o layout de bundle do iOS (executável direto dentro de
-        # `JKLar.app`). No macOS o executável fica em `JKLar.app/Contents/MacOS/JKLar` — sem
+        # `FridgeMagnet.app`). No macOS o executável fica em `FridgeMagnet.app/Contents/MacOS/FridgeMagnet` — sem
         # este override condicional por SDK o teste hosted falha ao localizar o TEST_HOST no
-        # build de macOS ("Could not find test host for JKLarTests").
-        TEST_HOST[sdk=macosx*]: "$(BUILT_PRODUCTS_DIR)/JKLar.app/Contents/MacOS/JKLar"
+        # build de macOS ("Could not find test host for FridgeMagnetTests").
+        TEST_HOST[sdk=macosx*]: "$(BUILT_PRODUCTS_DIR)/FridgeMagnet.app/Contents/MacOS/FridgeMagnet"
         # O bundle de testes não tem um `info:` próprio (só o app tem) — sem gerar um
         # Info.plist automático, o codesign do bundle falha ("Cannot code sign because the
         # target does not have an Info.plist file").

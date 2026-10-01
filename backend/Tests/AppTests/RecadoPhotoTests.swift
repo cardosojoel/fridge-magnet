@@ -2,7 +2,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Plano 02-04 — presign/confirm/urls de foto do carrossel (MURAL-01 parte foto, D-01, D-02),
@@ -31,7 +31,7 @@ final class RecadoPhotoTests: XCTestCase {
             setenv("R2_ACCOUNT_ID", "test-account-id", 1)
             setenv("R2_ACCESS_KEY_ID", "test-access-key-id", 1)
             setenv("R2_SECRET_ACCESS_KEY", "test-secret-access-key", 1)
-            setenv("R2_BUCKET_NAME", "jklar-recado-photos-test", 1)
+            setenv("R2_BUCKET_NAME", "fridgemagnet-recado-photos-test", 1)
         }
 
         setAllFourPresent()
@@ -799,7 +799,7 @@ final class RecadoPhotoTests: XCTestCase {
         return keys
     }
 
-    /// Leitura direta de `recado_photos` via conexão `jklar_app` com o contexto de casa
+    /// Leitura direta de `recado_photos` via conexão `fridgemagnet_app` com o contexto de casa
     /// aplicado — mesmo padrão de `RecadoRLSIsolationTests`, usado aqui só para inspecionar o
     /// que o controller realmente gravou (o teste não pode confiar só na resposta HTTP para
     /// provar "tudo ou nada").

@@ -1,7 +1,7 @@
 @testable import App
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Plano 01-08 Task 1 — os sete casos de `<behavior>`: Google e Microsoft passam pelo

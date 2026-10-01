@@ -1,7 +1,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import Vapor
 
 /// `POST /api/v1/recados/:recadoID/photos/presign`, `POST /api/v1/recados/:recadoID/photos/confirm`,

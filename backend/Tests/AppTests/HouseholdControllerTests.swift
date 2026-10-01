@@ -1,7 +1,7 @@
 @testable import App
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Cobre os oito casos de `<behavior>` do plano 01-02 — `POST /api/v1/households`,

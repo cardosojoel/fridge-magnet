@@ -1,7 +1,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import Vapor
 
 /// Contexto de tenant resolvido para o request — a casa e o papel do requisitante nela.

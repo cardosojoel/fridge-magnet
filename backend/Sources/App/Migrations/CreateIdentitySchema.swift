@@ -10,8 +10,8 @@ import FluentSQL
 /// RLS `ENABLE` + `FORCE` desde a primeira versão. Reavaliar esta decisão se alguma rota
 /// de domínio passar a ler `users`/`linked_identities` diretamente.
 ///
-/// Roda no database **owner** (`jklar_owner`, ver `configure.swift`) — o papel de runtime
-/// `jklar_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
+/// Roda no database **owner** (`fridgemagnet_owner`, ver `configure.swift`) — o papel de runtime
+/// `fridgemagnet_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
 struct CreateIdentitySchema: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("users")
@@ -45,10 +45,10 @@ struct CreateIdentitySchema: AsyncMigration {
             WHERE email_verified = true
             """).run()
 
-        // jklar_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS, criado por
+        // fridgemagnet_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS, criado por
         // scripts/dev-db.sh) — só ele recebe DML nas tabelas de aplicação.
-        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON users TO jklar_app").run()
-        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON linked_identities TO jklar_app").run()
+        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON users TO fridgemagnet_app").run()
+        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON linked_identities TO fridgemagnet_app").run()
     }
 
     func revert(on database: Database) async throws {

@@ -10,7 +10,7 @@ import FluentSQL
 ///
 /// Nenhuma tabela nova, nenhuma policy nova, nenhuma concessão de DML nova: `recados` já
 /// está sob `ENABLE`+`FORCE` de isolamento por linha com a política `household_isolation`
-/// (ver `CreateRecadoSchema`), e a concessão de DML que `jklar_app` já tem vale para a
+/// (ver `CreateRecadoSchema`), e a concessão de DML que `fridgemagnet_app` já tem vale para a
 /// tabela inteira, colunas futuras incluídas — uma policy nova aqui seria uma segunda fonte
 /// de verdade.
 struct AddRecadoPinAndArchive: AsyncMigration {

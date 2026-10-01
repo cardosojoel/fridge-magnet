@@ -164,7 +164,7 @@ final class RecadoPhoto: Model, @unchecked Sendable {
 }
 
 /// Reação de um membro a um recado (D-07, D-07b) — `kind` guarda o `rawValue` cru do
-/// `ReactionKind` fechado de `JKLarShared`, string crua na coluna e validada pelo enum
+/// `ReactionKind` fechado de `FridgeMagnetShared`, string crua na coluna e validada pelo enum
 /// compartilhado na borda HTTP, igual a `DeviceToken.platform`/`environment`.
 /// `unique(recado_id, user_id)` no schema é a constraint de D-07b: uma reação ativa por
 /// pessoa por recado, trocar substitui em vez de acumular.

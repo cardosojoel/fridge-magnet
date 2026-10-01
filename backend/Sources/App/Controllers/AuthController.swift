@@ -1,11 +1,11 @@
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import JWT
 import Vapor
 
 /// `POST /api/v1/auth/session` — verifica um identity token de provedor, resolve a
-/// identidade interna e emite um JWT próprio do JK Lar.
+/// identidade interna e emite um JWT próprio do FridgeMagnet.
 ///
 /// Os três provedores (Apple, Google, Microsoft — D-01) passam pelo mesmo caminho desde o
 /// plano 01-08: `AuthController` seleciona o verificador pelo registro
@@ -168,7 +168,7 @@ struct AuthController: RouteCollection {
     }
 }
 
-/// Payload do access token próprio do JK Lar — ES256, 15 min (D-09). `sub` é `users.id`,
+/// Payload do access token próprio do FridgeMagnet — ES256, 15 min (D-09). `sub` é `users.id`,
 /// nunca o `sub` do provedor externo.
 struct AccessTokenPayload: JWTPayload {
     enum CodingKeys: String, CodingKey {

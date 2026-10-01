@@ -4,7 +4,7 @@ import Crypto
 import Fluent
 import FluentPostgresDriver
 import FluentSQL
-import JKLarShared
+import FridgeMagnetShared
 import JWT
 import SotoS3
 import Vapor
@@ -32,8 +32,8 @@ struct Entrypoint {
     }
 }
 
-/// `DatabaseID` do papel dono do schema (`jklar_owner`) — só as migrations rodam aqui. O
-/// default `.psql` (`DATABASE_URL`) usa o papel de runtime `jklar_app`, sem DDL.
+/// `DatabaseID` do papel dono do schema (`fridgemagnet_owner`) — só as migrations rodam aqui. O
+/// default `.psql` (`DATABASE_URL`) usa o papel de runtime `fridgemagnet_app`, sem DDL.
 extension DatabaseID {
     static var owner: DatabaseID { .init(string: "owner") }
 }
@@ -92,16 +92,16 @@ extension Application {
 func configure(_ app: Application) async throws {
     // MARK: Bancos — dois DatabaseID, dois papéis de banco (scripts/dev-db.sh cria ambos).
     guard let databaseURL = Environment.get("DATABASE_URL") else {
-        fatalError("DATABASE_URL não definida — DSN do papel de runtime jklar_app (ver scripts/dev-db.sh)")
+        fatalError("DATABASE_URL não definida — DSN do papel de runtime fridgemagnet_app (ver scripts/dev-db.sh)")
     }
     guard let databaseOwnerURL = Environment.get("DATABASE_OWNER_URL") else {
-        fatalError("DATABASE_OWNER_URL não definida — DSN do papel dono jklar_owner (ver scripts/dev-db.sh)")
+        fatalError("DATABASE_OWNER_URL não definida — DSN do papel dono fridgemagnet_owner (ver scripts/dev-db.sh)")
     }
     app.databases.use(try .postgres(url: databaseURL), as: .psql)
     app.databases.use(try .postgres(url: databaseOwnerURL), as: .owner)
 
     // As migrations dos planos de identidade e de tenant rodam no database owner —
-    // jklar_app nunca tem DDL, só o DML explicitamente concedido no fim de cada migration.
+    // fridgemagnet_app nunca tem DDL, só o DML explicitamente concedido no fim de cada migration.
     app.migrations.add(CreateIdentitySchema(), to: .owner)
     app.migrations.add(CreateHouseholdSchema(), to: .owner)
     app.migrations.add(CreateRefreshTokens(), to: .owner)
@@ -208,7 +208,7 @@ func configure(_ app: Application) async throws {
     }
 
     // MARK: Asserção de papel de banco no boot.
-    // Fora de `.testing`, servir com `jklar_owner` desativaria a Row-Level Security que o
+    // Fora de `.testing`, servir com `fridgemagnet_owner` desativaria a Row-Level Security que o
     // plano 01-02 instala nas tabelas de tenant — e o sintoma seria silêncio: tudo
     // funcionaria e nada estaria isolado. Abortar o processo é a única resposta segura.
     if app.environment != .testing {
@@ -229,8 +229,8 @@ func configure(_ app: Application) async throws {
     }
 }
 
-/// `SELECT current_user` real contra o banco de runtime (`.psql`, papel `jklar_app`
-/// esperado). Aborta o processo se o resultado for `jklar_owner` — ver comentário acima.
+/// `SELECT current_user` real contra o banco de runtime (`.psql`, papel `fridgemagnet_app`
+/// esperado). Aborta o processo se o resultado for `fridgemagnet_owner` — ver comentário acima.
 private func assertRuntimeDatabaseRole(_ app: Application) async throws {
     guard let sql = app.db(.psql) as? SQLDatabase else {
         fatalError("Banco de runtime (.psql) não é um SQLDatabase — impossível checar current_user")
@@ -239,8 +239,8 @@ private func assertRuntimeDatabaseRole(_ app: Application) async throws {
         fatalError("SELECT current_user não devolveu nenhuma linha")
     }
     let currentUser = try row.decode(column: "current_user", as: String.self)
-    guard currentUser != "jklar_owner" else {
-        fatalError("Backend conectado como jklar_owner — recusando subir (desativaria a RLS do plano 01-02)")
+    guard currentUser != "fridgemagnet_owner" else {
+        fatalError("Backend conectado como fridgemagnet_owner — recusando subir (desativaria a RLS do plano 01-02)")
     }
 }
 

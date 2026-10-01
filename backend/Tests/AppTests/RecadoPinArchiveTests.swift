@@ -1,7 +1,7 @@
 @testable import App
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// D-14/D-15 (plano 02-11): fixar/desafixar e arquivar/desarquivar com a matriz de

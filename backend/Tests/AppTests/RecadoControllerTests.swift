@@ -2,7 +2,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Prova ponta a ponta do plano 02-01 (MURAL-01 parte texto, MURAL-05): postar um recado de

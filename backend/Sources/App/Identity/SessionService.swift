@@ -2,11 +2,11 @@ import Crypto
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import JWT
 import Vapor
 
-/// Único ponto de emissão, rotação e revogação de sessão do JK Lar (plano 01-04).
+/// Único ponto de emissão, rotação e revogação de sessão do FridgeMagnet (plano 01-04).
 ///
 /// `AuthController` nunca gera ou invalida um refresh token diretamente — toda sessão
 /// passa por `issueSession`, `rotate`, `revoke` ou `revokeFamily`. O valor cru do refresh

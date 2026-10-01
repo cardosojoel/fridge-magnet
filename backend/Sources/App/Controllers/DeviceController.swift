@@ -1,7 +1,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import Vapor
 
 /// `POST /api/v1/devices` — registro de device token de push (IDENT-05, IDENT-06).
@@ -107,7 +107,7 @@ struct DeviceController: RouteCollection {
         for token in tokens {
             try await req.application.pushService.send(
                 to: token,
-                title: "JK Lar",
+                title: "FridgeMagnet",
                 body: "Notificação de teste.",
                 on: req.scopedDB
             )

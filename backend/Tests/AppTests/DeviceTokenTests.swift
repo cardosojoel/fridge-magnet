@@ -2,7 +2,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Cobre os oito casos de `<behavior>` da Task 2 do plano 01-11 (registro de device token
@@ -229,7 +229,7 @@ final class DeviceTokenTests: XCTestCase {
             // Simula "o mesmo usuário passou a pertencer à casa B" sem depender de um fluxo
             // de sair/entrar (fora do escopo desta fase — ver 01-10): move só a linha de
             // `household_members` diretamente, usando as mesmas GUCs de sessão que a
-            // produção usa (papel `jklar_app`, nunca `jklar_owner`). A cláusula
+            // produção usa (papel `fridgemagnet_app`, nunca `fridgemagnet_owner`). A cláusula
             // `user_id = app.current_user_id` da policy de `household_members`
             // (`CreateHouseholdSchema`) é o que torna esta linha visível/atualizável mesmo
             // já não estando mais em `household_id = A`.
@@ -355,7 +355,7 @@ final class DeviceTokenTests: XCTestCase {
             setenv("APNS_KEY_ID", "test-key-id", 1)
             setenv("APNS_TEAM_ID", "test-team-id", 1)
             setenv("APNS_PRIVATE_KEY_P8", "test-pem", 1)
-            setenv("APNS_TOPIC", "com.jklar.app.test", 1)
+            setenv("APNS_TOPIC", "com.fridgemagnet.app.test", 1)
         }
 
         setAllFourPresent()

@@ -6,12 +6,12 @@ import FluentSQL
 ///
 /// `household_id` + policy RLS é a convenção herdada por toda tabela de domínio das Fases 2
 /// a 10 — decisão de arquitetura já fechada em PROJECT.md (zero-trust) e 01-RESEARCH.md
-/// Pattern 2. `FORCE` é obrigatório: sem ele, o dono da tabela (`jklar_owner`, que roda esta
+/// Pattern 2. `FORCE` é obrigatório: sem ele, o dono da tabela (`fridgemagnet_owner`, que roda esta
 /// migration) ignoraria a policy por padrão no PostgreSQL 17, e o teste de isolamento da
 /// Task 2 passaria sem provar nada caso alguém conectasse acidentalmente como dono.
 ///
-/// Roda no database **owner** (`jklar_owner`, ver `configure.swift`) — o papel de runtime
-/// `jklar_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
+/// Roda no database **owner** (`fridgemagnet_owner`, ver `configure.swift`) — o papel de runtime
+/// `fridgemagnet_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
 struct CreateHouseholdSchema: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("households")
@@ -48,7 +48,7 @@ struct CreateHouseholdSchema: AsyncMigration {
         // `household_members` — mesma policy de `household_id`, **mais** uma segunda
         // cláusula OR sobre `user_id = app.current_user_id`. Esta segunda cláusula não está
         // no texto literal do plano, mas é necessária para o bootstrap funcionar: sob RLS
-        // forçada, `jklar_app` (NOBYPASSRLS) não tem nenhuma forma de descobrir a casa de um
+        // forçada, `fridgemagnet_app` (NOBYPASSRLS) não tem nenhuma forma de descobrir a casa de um
         // usuário sem já conhecer o `household_id` — a policy de uma cláusula só cria um
         // impasse (nenhuma linha nunca é visível antes de `app.current_household_id`
         // existir, mesmo para o próprio dono da linha). `HouseholdContextMiddleware` e
@@ -69,10 +69,10 @@ struct CreateHouseholdSchema: AsyncMigration {
             )
             """).run()
 
-        // jklar_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS, criado por
+        // fridgemagnet_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS, criado por
         // scripts/dev-db.sh) — só ele recebe DML nas tabelas de aplicação.
-        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON households TO jklar_app").run()
-        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON household_members TO jklar_app").run()
+        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON households TO fridgemagnet_app").run()
+        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON household_members TO fridgemagnet_app").run()
     }
 
     func revert(on database: Database) async throws {

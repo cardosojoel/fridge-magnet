@@ -1,4 +1,4 @@
-import JKLarShared
+import FridgeMagnetShared
 import Vapor
 
 /// Autorização por papel (IDENT-06), resolvida sempre do banco — nunca de cabeçalho, query

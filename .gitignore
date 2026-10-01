@@ -19,9 +19,9 @@
 client/Local.xcconfig
 
 # Artefatos gerados pelo XcodeGen a partir de client/project.yml (plano 01-03) — nunca versionados
-client/JKLar.xcodeproj/
-client/JKLar/Info.plist
-client/JKLar/JKLar.entitlements
+client/FridgeMagnet.xcodeproj/
+client/FridgeMagnet/Info.plist
+client/FridgeMagnet/FridgeMagnet.entitlements
 
 # Planejamento e instruções locais de agente — ficam na máquina, fora do repositório
 .planning/

@@ -1,5 +1,5 @@
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import Vapor
 
 /// Identidade resultante de uma verificação bem-sucedida — só o que sobrevive além do

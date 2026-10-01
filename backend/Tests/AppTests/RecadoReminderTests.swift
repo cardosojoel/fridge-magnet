@@ -2,7 +2,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// D-16 (plano 02-14): lembrete opcional com data/hora no recado — o par
@@ -128,7 +128,7 @@ final class RecadoReminderTests: XCTestCase {
         return (capturedStatus, capturedDTO, capturedError)
     }
 
-    /// Grava um lembrete DIRETO no banco (sob a mesma conexão `jklar_app` com contexto de
+    /// Grava um lembrete DIRETO no banco (sob a mesma conexão `fridgemagnet_app` com contexto de
     /// casa) — a única forma de montar o cenário "lembrete guardado que já passou": o
     /// servidor recusa criar um par vencido pela rota, e é isso mesmo.
     private static func writeReminderDirectly(

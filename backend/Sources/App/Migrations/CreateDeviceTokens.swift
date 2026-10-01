@@ -4,8 +4,8 @@ import FluentSQL
 /// Migration do **plano de push** (01-11) — tabela `device_tokens`, com Row-Level Security
 /// `ENABLE`+`FORCE` desde esta primeira versão, nunca retrofitada.
 ///
-/// Roda no database **owner** (`jklar_owner`, ver `configure.swift`) — o papel de runtime
-/// `jklar_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
+/// Roda no database **owner** (`fridgemagnet_owner`, ver `configure.swift`) — o papel de runtime
+/// `fridgemagnet_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
 struct CreateDeviceTokens: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("device_tokens")
@@ -36,7 +36,7 @@ struct CreateDeviceTokens: AsyncMigration {
         // globalmente, e "o mesmo dispositivo trocando de casa" (must_have deste plano) só
         // funciona sem virar lixo acumulado se a linha antiga continuar visível para o
         // próprio dono do token mesmo depois que `household_id` mudou de baixo dela. Sob
-        // `FORCE`, nem `jklar_owner` (dono da tabela) escapa da policy — então uma policy de
+        // `FORCE`, nem `fridgemagnet_owner` (dono da tabela) escapa da policy — então uma policy de
         // cláusula única (`household_id = app.current_household_id`) tornaria essa linha
         // permanentemente invisível assim que a casa do usuário mudasse, e o upsert bateria
         // no índice único em vez de mover a linha (o mesmo raciocínio "Rule 1 — bug de
@@ -54,9 +54,9 @@ struct CreateDeviceTokens: AsyncMigration {
             )
             """).run()
 
-        // jklar_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS) — só ele
+        // fridgemagnet_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS) — só ele
         // recebe DML na tabela de aplicação.
-        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON device_tokens TO jklar_app").run()
+        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON device_tokens TO fridgemagnet_app").run()
     }
 
     func revert(on database: Database) async throws {

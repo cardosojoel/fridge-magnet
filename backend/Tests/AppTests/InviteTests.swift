@@ -1,7 +1,7 @@
 @testable import App
 import Fluent
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import XCTVapor
 
 /// Cobre os oito casos de `<behavior>` da Task 1 do plano 01-06 — convite por código CSPRNG,
@@ -149,7 +149,7 @@ final class InviteTests: XCTestCase {
 
             let dto = try XCTUnwrap(result.dto)
             XCTAssertEqual(dto.code.count, 6)
-            XCTAssertEqual(dto.url, "jklar://join/\(dto.code)")
+            XCTAssertEqual(dto.url, "fridgemagnet://join/\(dto.code)")
 
             let expectedExpiry = before.addingTimeInterval(7 * 24 * 60 * 60)
             XCTAssertEqual(dto.expiresAt.timeIntervalSince(expectedExpiry), 0, accuracy: 5)

@@ -8,8 +8,8 @@ import FluentSQL
 /// registrada em `CreateIdentitySchema` para `users`/`linked_identities` — o acesso aqui é
 /// sempre chaveado por `token_hash`, nunca por `household_id`).
 ///
-/// Roda no database **owner** (`jklar_owner`, ver `configure.swift`) — o papel de runtime
-/// `jklar_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
+/// Roda no database **owner** (`fridgemagnet_owner`, ver `configure.swift`) — o papel de runtime
+/// `fridgemagnet_app` só recebe o `GRANT` de DML explícito no fim desta migration, nunca DDL.
 struct CreateRefreshTokens: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("refresh_tokens")
@@ -35,9 +35,9 @@ struct CreateRefreshTokens: AsyncMigration {
         // futura ("listar sessões ativas de um usuário") o reaproveita sem migration nova.
         try await sql.raw("CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens (user_id)").run()
 
-        // jklar_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS, criado por
+        // fridgemagnet_app é o papel de runtime do backend (NOSUPERUSER NOBYPASSRLS, criado por
         // scripts/dev-db.sh) — só ele recebe DML nas tabelas de aplicação.
-        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON refresh_tokens TO jklar_app").run()
+        try await sql.raw("GRANT SELECT, INSERT, UPDATE, DELETE ON refresh_tokens TO fridgemagnet_app").run()
     }
 
     func revert(on database: Database) async throws {

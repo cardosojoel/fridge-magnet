@@ -1,7 +1,7 @@
 import Fluent
 import Foundation
 
-/// Conta interna do JK Lar — a chave de junção lida por toda tabela de domínio das Fases
+/// Conta interna do FridgeMagnet — a chave de junção lida por toda tabela de domínio das Fases
 /// 2 a 10. Nunca chaveada pelo `sub` de um provedor nem por e-mail (01-RESEARCH.md
 /// Pitfall 4): só por este UUID.
 final class User: Model, @unchecked Sendable {
@@ -14,7 +14,7 @@ final class User: Model, @unchecked Sendable {
     var displayName: String?
 
     /// String bruta ("feminino" | "masculino" | "naoInformado") espelhando `Gender` do
-    /// contrato compartilhado (`JKLarShared`) — opcional por D-04.
+    /// contrato compartilhado (`FridgeMagnetShared`) — opcional por D-04.
     @OptionalField(key: "gender")
     var gender: String?
 

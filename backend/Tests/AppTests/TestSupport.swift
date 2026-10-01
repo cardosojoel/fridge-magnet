@@ -4,28 +4,28 @@ import CryptoExtras
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import JWT
 import Vapor
 import XCTVapor
 
 /// Apoio de teste do backend inteiro.
 ///
-/// Sobe o `Application` em `.testing` contra o banco `jklar_test` (papéis `jklar_app` e
-/// `jklar_owner` já criados por `scripts/dev-db.sh`), roda as migrations com o DSN owner
+/// Sobe o `Application` em `.testing` contra o banco `fridgemagnet_test` (papéis `fridgemagnet_app` e
+/// `fridgemagnet_owner` já criados por `scripts/dev-db.sh`), roda as migrations com o DSN owner
 /// (dentro de `configure(_:)`, chamado normalmente), limpa as tabelas de identidade entre
 /// testes, e assina identity tokens de provedor falsos com um par de chaves RSA em
 /// memória. O JWKS correspondente é servido por um `Client` falso registrado ANTES de
 /// `configure(_:)` rodar — `AppleTokenVerifier` nunca toca a rede real da Apple durante os
 /// testes.
-/// `DatabaseID` só de teste — a segunda conexão `jklar_app` independente usada por
+/// `DatabaseID` só de teste — a segunda conexão `fridgemagnet_app` independente usada por
 /// `TestSupport.withAppRoleConnection` (plano 01-02, `RLSIsolationTests`).
 extension DatabaseID {
     static var appRoleTestConnection: DatabaseID { .init(string: "appRoleTestConnection") }
 }
 
 enum TestSupport {
-    static let testAppleAudience = "com.jklar.app.test"
+    static let testAppleAudience = "com.fridgemagnet.app.test"
     static let testAppleKeyID = "test-apple-key-1"
 
     /// Plano 01-08 — mesma forma da Apple, uma chave/kid por provedor para que o caso
@@ -63,7 +63,7 @@ enum TestSupport {
     }()
 
     /// Senha de um papel do Postgres local, lida do ambiente e nunca versionada. É a mesma
-    /// que `scripts/dev-db.sh` usou ao criar os papéis `jklar_app` e `jklar_owner`.
+    /// que `scripts/dev-db.sh` usou ao criar os papéis `fridgemagnet_app` e `fridgemagnet_owner`.
     static func dbPassword(_ variable: String) -> String {
         guard let value = ProcessInfo.processInfo.environment[variable], !value.isEmpty else {
             fatalError("\(variable) não definida — exporte a mesma senha usada em scripts/dev-db.sh")
@@ -77,12 +77,12 @@ enum TestSupport {
     static func makeApp() async throws -> Application {
         setenv(
             "DATABASE_URL",
-            "postgres://jklar_app:\(dbPassword("JKLAR_APP_PASSWORD"))@127.0.0.1:5432/jklar_test?sslmode=disable",
+            "postgres://fridgemagnet_app:\(dbPassword("FRIDGEMAGNET_APP_PASSWORD"))@127.0.0.1:5432/fridgemagnet_test?sslmode=disable",
             1
         )
         setenv(
             "DATABASE_OWNER_URL",
-            "postgres://jklar_owner:\(dbPassword("JKLAR_OWNER_PASSWORD"))@127.0.0.1:5432/jklar_test?sslmode=disable",
+            "postgres://fridgemagnet_owner:\(dbPassword("FRIDGEMAGNET_OWNER_PASSWORD"))@127.0.0.1:5432/fridgemagnet_test?sslmode=disable",
             1
         )
         setenv("APPLE_AUDIENCE", testAppleAudience, 1)
@@ -118,7 +118,7 @@ enum TestSupport {
 
     /// `TRUNCATE` via conexão owner — chamado dentro de `makeApp()`. Cada teste começa com
     /// as quatro tabelas de identidade e de tenant vazias, mesmo rodando contra o mesmo
-    /// banco `jklar_test` persistente entre execuções da suíte.
+    /// banco `fridgemagnet_test` persistente entre execuções da suíte.
     ///
     /// A conexão owner ignora a policy RLS de `households`/`household_members` só porque
     /// `TRUNCATE` (ao contrário de `SELECT`/`DELETE`) não é filtrado por Row-Level Security
@@ -213,7 +213,7 @@ enum TestSupport {
         return user
     }
 
-    /// Assina um access token do JK Lar (não um identity token de provedor) para `userID` —
+    /// Assina um access token do FridgeMagnet (não um identity token de provedor) para `userID` —
     /// o mesmo `AccessTokenPayload` que `AuthController` emite, usado pelos testes do plano
     /// de tenant para autenticar chamadas a `POST /api/v1/households` e
     /// `GET /api/v1/households/current` sem depender de `/auth/session`.
@@ -225,9 +225,9 @@ enum TestSupport {
         return try await app.jwt.keys.sign(payload)
     }
 
-    /// Uma conexão Postgres separada, autenticada como `jklar_app` (não `jklar_owner`) —
+    /// Uma conexão Postgres separada, autenticada como `fridgemagnet_app` (não `fridgemagnet_owner`) —
     /// usada só por `RLSIsolationTests` para provar isolamento entre casas com um papel de
-    /// banco sujeito de verdade às policies (o app inteiro já roda como `jklar_app` via
+    /// banco sujeito de verdade às policies (o app inteiro já roda como `fridgemagnet_app` via
     /// `DATABASE_URL`; este helper abre uma segunda conexão independente da `Application`
     /// para poder controlar exatamente qual contexto de tenant está ativo em cada asserção,
     /// sem interferir na conexão de runtime do app de teste).
@@ -243,8 +243,8 @@ enum TestSupport {
         userID: UUID? = nil,
         _ body: @escaping @Sendable (any SQLDatabase) async throws -> T
     ) async throws -> T {
-        let appPassword = dbPassword("JKLAR_APP_PASSWORD")
-        let dsn = "postgres://jklar_app:\(appPassword)@127.0.0.1:5432/jklar_test?sslmode=disable"
+        let appPassword = dbPassword("FRIDGEMAGNET_APP_PASSWORD")
+        let dsn = "postgres://fridgemagnet_app:\(appPassword)@127.0.0.1:5432/fridgemagnet_test?sslmode=disable"
         app.databases.use(try .postgres(url: dsn), as: .appRoleTestConnection)
 
         return try await app.db(.appRoleTestConnection).transaction { transactionDB in

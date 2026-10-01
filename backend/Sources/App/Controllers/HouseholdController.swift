@@ -1,7 +1,7 @@
 import Fluent
 import FluentSQL
 import Foundation
-import JKLarShared
+import FridgeMagnetShared
 import Vapor
 
 /// `POST /api/v1/households`, `GET /api/v1/households/current` (plano 01-02) e as rotas de
@@ -156,7 +156,7 @@ struct HouseholdController: RouteCollection {
             )
             do {
                 try await invite.save(on: req.scopedDB)
-                let dto = InviteDTO(code: code, url: "jklar://join/\(code)", expiresAt: expiresAt)
+                let dto = InviteDTO(code: code, url: "fridgemagnet://join/\(code)", expiresAt: expiresAt)
                 return try Self.jsonResponse(dto, status: .created)
             } catch let error as any DatabaseError where error.isConstraintFailure {
                 // Colisão de código (índice único em `code`) — nunca sobrescreve a linha
@@ -184,7 +184,7 @@ struct HouseholdController: RouteCollection {
             .all()
 
         let dtos = invites.map { invite in
-            InviteDTO(code: invite.code, url: "jklar://join/\(invite.code)", expiresAt: invite.expiresAt)
+            InviteDTO(code: invite.code, url: "fridgemagnet://join/\(invite.code)", expiresAt: invite.expiresAt)
         }
         return try Self.jsonResponse(dtos, status: .ok)
     }
